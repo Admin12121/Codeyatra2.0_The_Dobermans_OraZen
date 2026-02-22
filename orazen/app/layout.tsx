@@ -1,6 +1,18 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { ThemeProvider } from "next-themes";
+import {
+  Geist,
+  Geist_Mono,
+  JetBrains_Mono,
+  Instrument_Serif,
+  Instrument_Sans,
+  Urbanist,
+  Bricolage_Grotesque,
+} from "next/font/google";
 import "./globals.css";
+import { cn } from "@/lib/utils";
+import localFont from "next/font/local";
+import ClickSpark from "@/components/layout/cursor";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -10,6 +22,40 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+const jetBrainsMono = JetBrains_Mono({
+  variable: "--font-jetbrains-mono",
+  subsets: ["latin"],
+});
+
+const cooperLtBT = localFont({
+  src: "./fonts/cooperl.ttf",
+  variable: "--font-cooper-lt-bt",
+  weight: "400",
+});
+
+const instrumentSerif = Instrument_Serif({
+  variable: "--font-instrument-serif",
+  subsets: ["latin"],
+  weight: ["400"],
+});
+
+const instrumentSans = Instrument_Sans({
+  variable: "--font-instrument-sans",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+});
+
+const urbanist = Urbanist({
+  variable: "--font-urbanist",
+  subsets: ["latin"],
+});
+
+const bricolageGrotesque = Bricolage_Grotesque({
+  variable: "--font-bricolage-grotesque",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
 export const metadata: Metadata = {
@@ -23,11 +69,30 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={cn(
+          "antialiased",
+          geistSans.variable,
+          geistMono.variable,
+          jetBrainsMono.variable,
+          instrumentSerif.variable,
+          instrumentSans.variable,
+          urbanist.variable,
+          bricolageGrotesque.variable,
+          cooperLtBT.variable,
+        )}
       >
-        {children}
+        <ThemeProvider
+          defaultTheme="system"
+          attribute="class"
+          scriptProps={{
+            "data-cfasync": "false",
+          }}
+        >
+          {children}
+          <ClickSpark />
+        </ThemeProvider>
       </body>
     </html>
   );
