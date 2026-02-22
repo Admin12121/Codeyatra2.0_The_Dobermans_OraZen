@@ -1,0 +1,25 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+grpcio
+grpcio-tools
+protobuf
+
+llm-guard
+
+garak
+
+torch
+transformers
+numpy
+
+asyncio
+aiofiles
+
+requests
+
+python-dotenv
+pydantic
+loguru
+
+pytest
+pytest-asyncio
