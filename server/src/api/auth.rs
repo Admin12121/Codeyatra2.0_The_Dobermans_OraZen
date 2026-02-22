@@ -20,6 +20,7 @@ pub struct VerifySessionResponse {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+
 #[derive(Debug, Deserialize)]
 pub struct VerifyApiKeyRequest {
     pub api_key: String,
@@ -114,7 +115,7 @@ pub async fn verify_api_key(
 
             let rate_limit = RateLimit {
                 requests_per_minute: rate_limit_rpm.unwrap_or(60) as u32,
-                requests_remaining: 60,
+                requests_remaining: 60, // TODO: Get from Redis
                 reset_at: Utc::now(),
             };
 
