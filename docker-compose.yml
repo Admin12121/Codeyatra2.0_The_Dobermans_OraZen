@@ -1,0 +1,322 @@
+#   # Dev mode (full stack, frontend live mount + bun dev)
+#   docker compose --profile dev up -d
+#   docker compose --profile dev up -d --build backend   # rebuild backend only
+#
+#   # Production (full stack)
+#   docker compose --profile prod up -d
+#   docker compose --profile prod up -d --build   # rebuild images
+#   docker compose --profile prod logs -f          # tail all logs
+#   docker compose --profile prod down             # stop everything
+
+x-postgres-common: &postgres-common
+    image: ${POSTGRES_IMAGE:-postgres:alpine}
+    restart: unless-stopped
+    environment:
+        POSTGRES_DB: ${DATABASE_NAME:-tourism}
+        POSTGRES_USER: ${DATABASE_USER:-tourism}
+        POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-tourism_dev_password}
+    volumes:
+        - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+        test:
+            [
+                "CMD-SHELL",
+                "pg_isready -U ${DATABASE_USER:-tourism} -d ${DATABASE_NAME:-tourism}",
+            ]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 10s
+    networks:
+        - paayo_net
+
+x-redis-common: &redis-common
+    image: ${REDIS_IMAGE:-redis:alpine}
+    restart: unless-stopped
+    command:
+        - redis-server
+        - --appendonly
+        - "yes"
+        - --requirepass
+        - ${REDIS_PASSWORD:-redis_dev_password}
+        - --maxmemory
+        - ${REDIS_MAX_MEMORY:-256mb}
+        - --maxmemory-policy
+        - allkeys-lru
+    volumes:
+        - redis_data:/data
+    healthcheck:
+        test:
+            [
+                "CMD",
+                "redis-cli",
+                "-a",
+                "${REDIS_PASSWORD:-redis_dev_password}",
+                "ping",
+            ]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+    networks:
+        - paayo_net
+
+x-frontend-env: &frontend-env
+    NODE_ENV: ${NODE_ENV:-production}
+    DOCKER_ENV: "true"
+    APP_DOMAIN: ${APP_DOMAIN:-localhost}
+    APP_PUBLIC_ORIGIN: ${APP_PUBLIC_ORIGIN:-https://${APP_DOMAIN:-localhost}}
+    NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-${APP_PUBLIC_ORIGIN:-https://${APP_DOMAIN:-localhost}}}
+    NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api}
+    BETTER_AUTH_URL: ${BETTER_AUTH_URL:-${APP_PUBLIC_ORIGIN:-https://${APP_DOMAIN:-localhost}}}
+    PASSKEY_ORIGIN: ${PASSKEY_ORIGIN:-${APP_PUBLIC_ORIGIN:-https://${APP_DOMAIN:-localhost}}}
+    DATABASE_URL: ${DATABASE_URL:-postgresql://${DATABASE_USER:-tourism}:${DATABASE_PASSWORD_URLENC:-tourism_dev_password}@${DATABASE_HOST:-postgres}:${DATABASE_PORT:-5432}/${DATABASE_NAME:-tourism}}
+    BACKEND_API_URL: http://backend:8080/api
+    BACKEND_URL: http://backend:8080
+    REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD_URLENC:-redis_dev_password}@redis:6379}
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_dev_password}
+    BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-in-production}
+    PASSKEY_RP_ID: ${PASSKEY_RP_ID:-localhost}
+    GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    SMTP_HOST: ${SMTP_HOST:-}
+    SMTP_PORT: ${SMTP_PORT:-587}
+    SMTP_SECURE: ${SMTP_SECURE:-false}
+    SMTP_USER: ${SMTP_USER:-}
+    SMTP_PASS: ${SMTP_PASS:-}
+    SMTP_FROM: ${SMTP_FROM:-no-reply@${APP_DOMAIN:-localhost}}
+    SMTP_REPLY_TO: ${SMTP_REPLY_TO:-}
+    S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-}
+    S3_ENDPOINT: ${S3_ENDPOINT:-}
+
+x-backend-common: &backend-common
+    build:
+        context: ./tour_backend
+        dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+        - HOST=0.0.0.0
+        - PORT=8080
+        - DATABASE_URL=${DATABASE_URL:-postgresql://${DATABASE_USER:-tourism}:${DATABASE_PASSWORD_URLENC:-tourism_dev_password}@${DATABASE_HOST:-postgres}:${DATABASE_PORT:-5432}/${DATABASE_NAME:-tourism}}
+        - DATABASE_MAX_CONNECTIONS=${DATABASE_MAX_CONNECTIONS:-20}
+        - DATABASE_MIN_CONNECTIONS=${DATABASE_MIN_CONNECTIONS:-5}
+        - REDIS_URL=${REDIS_URL:-redis://:${REDIS_PASSWORD_URLENC:-redis_dev_password}@redis:6379}
+        - UPLOAD_PATH=/app/uploads
+        - MEDIA_STORAGE=${MEDIA_STORAGE:-local}
+        - S3_BUCKET=${S3_BUCKET:-}
+        - S3_REGION=${S3_REGION:-us-east-1}
+        - S3_ENDPOINT=${S3_ENDPOINT:-}
+        - S3_PUBLIC_BASE_URL=${S3_PUBLIC_BASE_URL:-}
+        - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID:-}
+        - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY:-}
+        - S3_SESSION_TOKEN=${S3_SESSION_TOKEN:-}
+        - S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE:-false}
+        - S3_KEY_PREFIX=${S3_KEY_PREFIX:-uploads}
+        - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-52428800}
+        - MAX_IMAGE_WIDTH=${MAX_IMAGE_WIDTH:-1920}
+        - THUMBNAIL_WIDTH=${THUMBNAIL_WIDTH:-400}
+        - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost,http://nginx}
+        - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@gmail.com}
+        - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin@#12}
+        - ADMIN_NAME=${ADMIN_NAME:-Admin}
+        - VIEWER_HASH_SALT=${VIEWER_HASH_SALT:-change-this-in-production}
+        # Use a backend-specific log filter so host/global RUST_LOG does not
+        # accidentally flood dev logs with trace/debug noise.
+        - RUST_LOG=${BACKEND_LOG_FILTER:-tour_backend=info,tower_http=warn,sqlx=warn}
+    volumes:
+        - upload_data:/app/uploads
+    extra_hosts:
+        - "host.docker.internal:host-gateway"
+    expose:
+        - "8080"
+    networks:
+        - paayo_net
+    healthcheck:
+        test: ["CMD", "curl", "-f", "http://localhost:8080/api/live"]
+        interval: 60s
+        timeout: 5s
+        retries: 5
+        start_period: 10s
+
+services:
+    postgres-local:
+        <<: *postgres-common
+        profiles: ["local"]
+        ports:
+            - "${POSTGRES_PORT:-5432}:5432"
+
+    postgres:
+        <<: *postgres-common
+        profiles: ["dev"]
+        expose:
+            - "5432"
+    redis-local:
+        <<: *redis-common
+        profiles: ["local"]
+        ports:
+            - "${REDIS_PORT:-6379}:6379"
+
+    redis:
+        <<: *redis-common
+        profiles: ["prod", "dev"]
+        expose:
+            - "6379"
+
+    nginx:
+        image: ${NGINX_IMAGE:-nginx:alpine}
+        restart: unless-stopped
+        profiles: ["prod"]
+        environment:
+            APP_DOMAIN: ${APP_DOMAIN:-localhost}
+            S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-}
+            S3_ENDPOINT: ${S3_ENDPOINT:-}
+        ports:
+            - "${NGINX_HTTP_PORT:-80}:80"
+            - "${NGINX_HTTPS_PORT:-443}:443"
+        volumes:
+            - ./docker/nginx/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+            - ./docker/nginx/certs:/etc/nginx/certs:ro
+            - nginx_cache:/var/cache/nginx
+        depends_on:
+            backend:
+                condition: service_healthy
+            frontend:
+                condition: service_started
+        networks:
+            - paayo_net
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "wget",
+                    "--no-verbose",
+                    "--tries=1",
+                    "--spider",
+                    "http://127.0.0.1/nginx-health",
+                ]
+            interval: 15s
+            timeout: 5s
+            retries: 3
+
+    nginx-dev:
+        image: ${NGINX_IMAGE:-nginx:alpine}
+        restart: unless-stopped
+        profiles: ["dev"]
+        environment:
+            APP_DOMAIN: ${DEV_APP_DOMAIN:-localhost}
+            S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-}
+            S3_ENDPOINT: ${S3_ENDPOINT:-}
+        ports:
+            - "${NGINX_HTTP_PORT:-80}:80"
+        volumes:
+            - ./docker/nginx/nginx.dev.conf.template:/etc/nginx/templates/default.conf.template:ro
+            - nginx_cache:/var/cache/nginx
+        depends_on:
+            backend:
+                condition: service_healthy
+            frontend-dev:
+                condition: service_started
+        networks:
+            - paayo_net
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "wget",
+                    "--no-verbose",
+                    "--tries=1",
+                    "--spider",
+                    "http://127.0.0.1/nginx-health",
+                ]
+            interval: 15s
+            timeout: 5s
+            retries: 3
+
+    backend:
+        <<: *backend-common
+        profiles: ["prod", "dev"]
+        depends_on:
+            redis:
+                condition: service_healthy
+    frontend:
+        build:
+            context: ./tour_frontend
+            dockerfile: Dockerfile
+            args:
+                BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-in-production}
+                NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-${APP_PUBLIC_ORIGIN:-https://${APP_DOMAIN:-localhost}}}
+                S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-}
+                S3_ENDPOINT: ${S3_ENDPOINT:-}
+        restart: unless-stopped
+        profiles: ["prod"]
+        environment:
+            <<: *frontend-env
+            NODE_ENV: production
+        expose:
+            - "3000"
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+        depends_on:
+            redis:
+                condition: service_healthy
+        networks:
+            - paayo_net
+
+    frontend-dev:
+        image: ${BUN_IMAGE:-oven/bun:latest}
+        restart: unless-stopped
+        profiles: ["dev"]
+        working_dir: /app
+        command: >
+            sh -lc "bun install && bun run dev --hostname 0.0.0.0 --port 3000"
+        environment:
+            <<: *frontend-env
+            NODE_ENV: development
+            APP_DOMAIN: ${DEV_APP_DOMAIN:-localhost}
+            APP_PUBLIC_ORIGIN: ${DEV_APP_PUBLIC_ORIGIN:-http://localhost}
+            NEXT_PUBLIC_APP_URL: ${DEV_NEXT_PUBLIC_APP_URL:-http://localhost}
+            BETTER_AUTH_URL: ${DEV_BETTER_AUTH_URL:-http://localhost}
+            PASSKEY_ORIGIN: ${DEV_PASSKEY_ORIGIN:-http://localhost}
+            PASSKEY_RP_ID: ${DEV_PASSKEY_RP_ID:-localhost}
+            NEXT_TELEMETRY_DISABLED: "1"
+            DEV_DASHBOARD_WARMUP: ${DEV_DASHBOARD_WARMUP:-true}
+            WATCHPACK_POLLING: ${DEV_WATCHPACK_POLLING:-false}
+        volumes:
+            - ./tour_frontend:/app
+            - frontend_node_modules:/app/node_modules
+            - frontend_next:/app/.next
+            - frontend_bun_cache:/root/.bun/install/cache
+        expose:
+            - "3000"
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+        depends_on:
+            postgres:
+                condition: service_healthy
+            redis:
+                condition: service_healthy
+        networks:
+            paayo_net:
+                aliases:
+                    - frontend
+
+volumes:
+    postgres_data:
+        driver: local
+    redis_data:
+        driver: local
+    upload_data:
+        driver: local
+    nginx_cache:
+        driver: local
+    frontend_node_modules:
+        driver: local
+    frontend_next:
+        driver: local
+    frontend_bun_cache:
+        driver: local
+
+networks:
+    paayo_net:
+        driver: bridge

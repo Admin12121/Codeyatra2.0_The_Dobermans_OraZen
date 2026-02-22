@@ -1,0 +1,84 @@
+# Environment files
+.env
+.env*.local
+.env.development.local
+.env.production.local
+
+.claude
+
+# Dependencies
+node_modules/
+tour_frontend/node_modules/
+tour_backend/target/
+
+# Build outputs
+tour_frontend/.next/
+tour_frontend/out/
+tour_frontend/build/
+tour_backend/target/
+dist/
+
+# Cache
+tour_frontend/.turbo/
+.cache/
+*.tsbuildinfo
+
+# Uploads
+uploads/
+tour_backend/uploads/
+
+# Database
+*.db
+*.sqlite
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+bun-debug.log*
+lerna-debug.log*
+
+# Testing
+coverage/
+.nyc_output/
+tour_frontend/coverage/
+*.lcov
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.st*
+# Lock files (keep bun.lockb and Cargo.lock)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# TypeScript
+next-env.d.ts
+
+# Docker
+docker-compose.override.yml
+
+# Misc
+*.pem
+.vercel
+.contentlayer
+
+# Temporary
+tmp/
+temp/
+*.tmp
+cleanup.txt
+
+# OS
+Thumbs.db
+.DS_Store
+
+dev.ps1
+PROJECT.md
+SECURITY_AUDIT.md
