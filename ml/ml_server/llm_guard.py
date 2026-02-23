@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -179,6 +180,10 @@ class LLMGuardScanner:
         )
 
         self._vault = Vault()
+        self._scanner_build_lock = threading.Lock()
+        self._dynamic_input_scanner_cache: Dict[Tuple[str, str, str], Any] = {}
+        self._dynamic_output_scanner_cache: Dict[Tuple[str, str, str], Any] = {}
+        self._scanner_cache_limit = 128
 
         self._default_input_scanners = {}
         self._default_output_scanners = {}
@@ -217,7 +222,73 @@ class LLMGuardScanner:
             f"{len(self._default_output_scanners)} output"
         )
 
+    @staticmethod
+    def _settings_fingerprint(settings: dict) -> str:
+        if not settings:
+            return "{}"
+        try:
+            return json.dumps(settings, sort_keys=True, separators=(",", ":"))
+        except TypeError:
+            return json.dumps(str(settings), separators=(",", ":"))
+
+    def _make_scanner_cache_key(
+        self, name: str, threshold: float, settings: dict
+    ) -> Tuple[str, str, str]:
+        threshold_key = f"{float(threshold):.6f}"
+        return (name, threshold_key, self._settings_fingerprint(settings))
+
+    def _remember_cached_scanner(
+        self,
+        cache: Dict[Tuple[str, str, str], Any],
+        key: Tuple[str, str, str],
+        scanner: Any,
+    ) -> None:
+        if key in cache:
+            return
+        if len(cache) >= self._scanner_cache_limit:
+            oldest_key = next(iter(cache))
+            cache.pop(oldest_key, None)
+        cache[key] = scanner
+
+    @staticmethod
+    def _risk_contribution(is_valid: bool, score: Any) -> float:
+        if is_valid:
+            return 0.0
+        try:
+            value = float(score)
+        except (TypeError, ValueError):
+            return 1.0
+        if value < 0:
+            return 1.0
+        return round(min(value, 1.0), 4)
+
     def _build_input_scanner(self, name: str, threshold: float, settings: dict):
+        normalized_settings = settings if isinstance(settings, dict) else {}
+        cache_key = self._make_scanner_cache_key(name, threshold, normalized_settings)
+
+        cached = self._dynamic_input_scanner_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        with self._scanner_build_lock:
+            cached = self._dynamic_input_scanner_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            scanner = self._build_input_scanner_uncached(
+                name=name,
+                threshold=threshold,
+                settings=normalized_settings,
+            )
+            if scanner is not None:
+                self._remember_cached_scanner(
+                    self._dynamic_input_scanner_cache, cache_key, scanner
+                )
+            return scanner
+
+    def _build_input_scanner_uncached(
+        self, name: str, threshold: float, settings: dict
+    ):
         """
         Build an input scanner instance from its name and settings.
         Returns the scanner instance or None if the scanner can't be built.
@@ -380,6 +451,32 @@ class LLMGuardScanner:
             return None
 
     def _build_output_scanner(self, name: str, threshold: float, settings: dict):
+        normalized_settings = settings if isinstance(settings, dict) else {}
+        cache_key = self._make_scanner_cache_key(name, threshold, normalized_settings)
+
+        cached = self._dynamic_output_scanner_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        with self._scanner_build_lock:
+            cached = self._dynamic_output_scanner_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            scanner = self._build_output_scanner_uncached(
+                name=name,
+                threshold=threshold,
+                settings=normalized_settings,
+            )
+            if scanner is not None:
+                self._remember_cached_scanner(
+                    self._dynamic_output_scanner_cache, cache_key, scanner
+                )
+            return scanner
+
+    def _build_output_scanner_uncached(
+        self, name: str, threshold: float, settings: dict
+    ):
         """
         Build an output scanner instance from its name and settings.
         Returns the scanner instance or None if the scanner can't be built.
@@ -609,7 +706,7 @@ class LLMGuardScanner:
         for scanner_name, is_valid in results_valid.items():
             score = results_score.get(scanner_name, 0.0)
             if not is_valid:
-                risk_contribution = round(1.0 - score, 4)
+                risk_contribution = self._risk_contribution(is_valid, score)
                 threats.append(
                     {
                         "type": scanner_name,
@@ -649,7 +746,7 @@ class LLMGuardScanner:
         for scanner_name, valid in results_valid.items():
             if not valid:
                 score = results_score.get(scanner_name, 0.0)
-                risk_contribution = round(1.0 - score, 4)
+                risk_contribution = self._risk_contribution(False, score)
                 issues.append(
                     {
                         "type": scanner_name,
@@ -741,11 +838,14 @@ class LLMGuardScanner:
     ) -> Dict[str, Any]:
         scanners = []
         scanner_names = []
+        build_failures = []
+        enabled_requested = 0
 
         if scanner_configs:
             for name, config in scanner_configs.items():
                 if not config.get("enabled", True):
                     continue
+                enabled_requested += 1
 
                 threshold = config.get("threshold", 0.5)
                 settings = config.get("settings", {})
@@ -754,6 +854,8 @@ class LLMGuardScanner:
                 if scanner is not None:
                     scanners.append(scanner)
                     scanner_names.append(name)
+                else:
+                    build_failures.append(name)
         else:
             for name in DEFAULT_INPUT_SCANNERS:
                 if name in self._default_input_scanners:
@@ -761,6 +863,26 @@ class LLMGuardScanner:
                     scanner_names.append(name)
 
         if not scanners:
+            if enabled_requested > 0:
+                return {
+                    "safe": False,
+                    "sanitized_text": prompt if sanitize else "",
+                    "risk_score": 1.0,
+                    "scanner_results": [
+                        {
+                            "scanner_name": failed_name,
+                            "is_valid": False,
+                            "score": 1.0,
+                            "description": (
+                                f"Scanner '{failed_name}' failed to initialize"
+                            ),
+                            "severity": "critical",
+                            "scanner_latency_ms": 0,
+                        }
+                        for failed_name in build_failures
+                    ],
+                    "scanners_run": 0,
+                }
             return {
                 "safe": True,
                 "sanitized_text": prompt if sanitize else "",
@@ -779,7 +901,7 @@ class LLMGuardScanner:
 
         for scanner_name, is_valid in results_valid.items():
             score = results_score.get(scanner_name, 0.0)
-            risk_contribution = round(1.0 - score, 4) if not is_valid else 0.0
+            risk_contribution = self._risk_contribution(is_valid, score)
             scanner_result = {
                 "scanner_name": scanner_name,
                 "is_valid": is_valid,
@@ -799,6 +921,23 @@ class LLMGuardScanner:
 
             scanner_results.append(scanner_result)
 
+        if build_failures:
+            is_safe = False
+            risk_score = max(risk_score, 1.0)
+            for failed_name in build_failures:
+                scanner_results.append(
+                    {
+                        "scanner_name": failed_name,
+                        "is_valid": False,
+                        "score": 1.0,
+                        "description": (
+                            f"Scanner '{failed_name}' failed to initialize"
+                        ),
+                        "severity": "critical",
+                        "scanner_latency_ms": 0,
+                    }
+                )
+
         return {
             "safe": is_safe,
             "sanitized_text": sanitized if sanitize else "",
@@ -817,11 +956,14 @@ class LLMGuardScanner:
     ) -> Dict[str, Any]:
         scanners = []
         scanner_names = []
+        build_failures = []
+        enabled_requested = 0
 
         if scanner_configs:
             for name, config in scanner_configs.items():
                 if not config.get("enabled", True):
                     continue
+                enabled_requested += 1
 
                 threshold = config.get("threshold", 0.5)
                 settings = config.get("settings", {})
@@ -830,6 +972,8 @@ class LLMGuardScanner:
                 if scanner is not None:
                     scanners.append(scanner)
                     scanner_names.append(name)
+                else:
+                    build_failures.append(name)
         else:
             for name in DEFAULT_OUTPUT_SCANNERS:
                 if name in self._default_output_scanners:
@@ -837,6 +981,26 @@ class LLMGuardScanner:
                     scanner_names.append(name)
 
         if not scanners:
+            if enabled_requested > 0:
+                return {
+                    "safe": False,
+                    "sanitized_text": output if sanitize else "",
+                    "risk_score": 1.0,
+                    "scanner_results": [
+                        {
+                            "scanner_name": failed_name,
+                            "is_valid": False,
+                            "score": 1.0,
+                            "description": (
+                                f"Scanner '{failed_name}' failed to initialize"
+                            ),
+                            "severity": "critical",
+                            "scanner_latency_ms": 0,
+                        }
+                        for failed_name in build_failures
+                    ],
+                    "scanners_run": 0,
+                }
             return {
                 "safe": True,
                 "sanitized_text": output if sanitize else "",
@@ -854,7 +1018,7 @@ class LLMGuardScanner:
 
         for scanner_name, is_valid in results_valid.items():
             score = results_score.get(scanner_name, 0.0)
-            risk_contribution = round(1.0 - score, 4) if not is_valid else 0.0
+            risk_contribution = self._risk_contribution(is_valid, score)
             scanner_result = {
                 "scanner_name": scanner_name,
                 "is_valid": is_valid,
@@ -873,6 +1037,23 @@ class LLMGuardScanner:
                 risk_score = max(risk_score, risk_contribution)
 
             scanner_results.append(scanner_result)
+
+        if build_failures:
+            is_safe = False
+            risk_score = max(risk_score, 1.0)
+            for failed_name in build_failures:
+                scanner_results.append(
+                    {
+                        "scanner_name": failed_name,
+                        "is_valid": False,
+                        "score": 1.0,
+                        "description": (
+                            f"Scanner '{failed_name}' failed to initialize"
+                        ),
+                        "severity": "critical",
+                        "scanner_latency_ms": 0,
+                    }
+                )
 
         return {
             "safe": is_safe,
