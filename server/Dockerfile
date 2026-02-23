@@ -5,23 +5,18 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
-    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
-COPY server/Cargo.toml ./
-
-COPY proto /proto
-
-COPY server/build.rs ./
+COPY server/Cargo.toml ./Cargo.toml
 
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 
 RUN cargo build --release && rm -rf src
 
 COPY server/src ./src
-COPY server/migrations ./migrations
+COPY server/migration ./migration
 
-RUN touch src/main.rs && cargo build --release
+RUN find src -type f -exec touch {} + && cargo build --release
 
 FROM debian:bookworm-slim
 
@@ -33,12 +28,12 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/orafinite-api /app/orafinite-api
+COPY --from=builder /app/target/release/server /app/server
 
-COPY --from=builder /app/migrations /app/migrations
+COPY --from=builder /app/migration /app/migration
 
 ENV RUST_LOG=orafinite_api=info,tower_http=info
 
 EXPOSE 8080
 
-CMD ["/app/orafinite-api"]
+CMD ["/app/server"]

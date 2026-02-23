@@ -33,7 +33,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             database_url:
-                "postgresql://orafinite_user:orafinite_dev_password@localhost:5432/orafinite"
+                "postgresql://orafinite_user:orafinite_dev_password@localhost:5432/orazen"
                     .to_string(),
             redis_url: "redis://127.0.0.1:6379".to_string(),
             server_host: "0.0.0.0".to_string(),
