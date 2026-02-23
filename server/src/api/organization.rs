@@ -11,7 +11,6 @@ use uuid::Uuid;
 use super::AppState;
 use crate::middleware::{ErrorResponse, require_session_from_headers};
 
-
 #[derive(Debug, Serialize)]
 pub struct OrganizationResponse {
     pub id: Uuid,

@@ -21,6 +21,7 @@ use uuid::Uuid;
 use std::collections::HashMap;
 
 use super::AppState;
+use crate::db::blockchain::append_scan_chain_block;
 use crate::grpc::ml_client::{CustomEndpointInfo, ModelConfig as GrpcModelConfig};
 use crate::middleware::{ErrorResponse, require_session_from_headers};
 
@@ -136,7 +137,7 @@ impl ScanType {
     }
 
     fn estimated_duration_seconds(&self, probe_count: usize) -> u32 {
-          let count = if probe_count > 0 {
+        let count = if probe_count > 0 {
             probe_count as u32
         } else {
             match self {
@@ -349,7 +350,6 @@ pub struct Vulnerability {
     pub retest_confirmed: i32,
 }
 
-
 async fn get_user_org_id(
     db: &sqlx::PgPool,
     user_id: &str,
@@ -538,6 +538,7 @@ pub async fn start_scan(
     tokio::spawn(async move {
         run_garak_scan(
             state_clone,
+            org_id,
             scan_id,
             model_config,
             probes,
@@ -558,6 +559,7 @@ pub async fn start_scan(
 
 async fn run_garak_scan(
     state: AppState,
+    org_id: Uuid,
     scan_id: Uuid,
     model_config: ModelConfig,
     probes: Vec<String>,
@@ -645,7 +647,7 @@ async fn run_garak_scan(
         scan_id,
         remote_scan_id
     );
-    poll_scan_status(state, scan_id, remote_scan_id).await;
+    poll_scan_status(state, org_id, scan_id, remote_scan_id).await;
 }
 
 async fn mark_scan_failed(state: &AppState, scan_id: Uuid, error_message: &str) {
@@ -660,7 +662,7 @@ async fn mark_scan_failed(state: &AppState, scan_id: Uuid, error_message: &str) 
     }
 }
 
-async fn poll_scan_status(state: AppState, scan_id: Uuid, remote_scan_id: String) {
+async fn poll_scan_status(state: AppState, org_id: Uuid, scan_id: Uuid, remote_scan_id: String) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(POLL_INTERVAL_SECS));
     let mut consecutive_failures = 0;
     const MAX_CONSECUTIVE_FAILURES: u32 = 10;
@@ -762,31 +764,7 @@ async fn poll_scan_status(state: AppState, scan_id: Uuid, remote_scan_id: String
                 continue;
             }
 
-            if let Err(e) = sqlx::query(
-                r#"
-                INSERT INTO scan_result (
-                    scan_id, probe_name, category, severity, description,
-                    attack_prompt, model_response, recommendation,
-                    success_rate, detector_name, probe_class, probe_duration_ms
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                "#,
-            )
-            .bind(scan_id)
-            .bind(&vuln.probe_name)
-            .bind(&vuln.category)
-            .bind(&vuln.severity)
-            .bind(&vuln.description)
-            .bind(&vuln.attack_prompt)
-            .bind(&vuln.model_response)
-            .bind(&vuln.recommendation)
-            .bind(vuln.success_rate)
-            .bind(&vuln.detector_name)
-            .bind(&vuln.probe_class)
-            .bind(vuln.probe_duration_ms)
-            .execute(&state.db)
-            .await
-            {
+            if let Err(e) = insert_scan_result_with_chain(&state, org_id, scan_id, vuln).await {
                 tracing::error!("Failed to store intermediate vulnerability: {}", e);
             } else {
                 stored_vuln_keys.insert(dedup_key);
@@ -807,51 +785,7 @@ async fn poll_scan_status(state: AppState, scan_id: Uuid, remote_scan_id: String
                 continue;
             }
 
-            let log_entries_json =
-                serde_json::to_value(&plog.log_lines).unwrap_or(serde_json::json!([]));
-            let detector_scores_json =
-                serde_json::to_value(&plog.detector_scores).unwrap_or(serde_json::json!([]));
-
-            if let Err(e) = sqlx::query(
-                r#"
-                INSERT INTO scan_log (
-                    scan_id, probe_name, probe_class, status,
-                    started_at, completed_at, duration_ms,
-                    prompts_sent, prompts_passed, prompts_failed,
-                    detector_name, detector_scores, error_message, log_entries
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-                "#,
-            )
-            .bind(scan_id)
-            .bind(&plog.probe_name)
-            .bind(&plog.probe_class)
-            .bind(&plog.status)
-            .bind(
-                chrono::DateTime::from_timestamp_millis(plog.started_at_ms)
-                    .map(|dt| dt.naive_utc()),
-            )
-            .bind(if plog.completed_at_ms > 0 {
-                chrono::DateTime::from_timestamp_millis(plog.completed_at_ms)
-                    .map(|dt| dt.naive_utc())
-            } else {
-                None
-            })
-            .bind(plog.duration_ms)
-            .bind(plog.prompts_sent)
-            .bind(plog.prompts_passed)
-            .bind(plog.prompts_failed)
-            .bind(&plog.detector_name)
-            .bind(&detector_scores_json)
-            .bind(if plog.error_message.is_empty() {
-                None
-            } else {
-                Some(&plog.error_message)
-            })
-            .bind(&log_entries_json)
-            .execute(&state.db)
-            .await
-            {
+            if let Err(e) = insert_scan_log_with_chain(&state, org_id, scan_id, plog).await {
                 tracing::error!("Failed to store probe log: {}", e);
             } else {
                 stored_log_keys.insert(log_key);
@@ -870,30 +804,13 @@ async fn poll_scan_status(state: AppState, scan_id: Uuid, remote_scan_id: String
                     if stored_vuln_keys.contains(&dedup_key) {
                         continue;
                     }
-                    let _ = sqlx::query(
-                        r#"
-                        INSERT INTO scan_result (
-                            scan_id, probe_name, category, severity, description,
-                            attack_prompt, model_response, recommendation,
-                            success_rate, detector_name, probe_class, probe_duration_ms
-                        )
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                        "#,
-                    )
-                    .bind(scan_id)
-                    .bind(&vuln.probe_name)
-                    .bind(&vuln.category)
-                    .bind(&vuln.severity)
-                    .bind(&vuln.description)
-                    .bind(&vuln.attack_prompt)
-                    .bind(&vuln.model_response)
-                    .bind(&vuln.recommendation)
-                    .bind(vuln.success_rate)
-                    .bind(&vuln.detector_name)
-                    .bind(&vuln.probe_class)
-                    .bind(vuln.probe_duration_ms)
-                    .execute(&state.db)
-                    .await;
+                    if let Err(e) =
+                        insert_scan_result_with_chain(&state, org_id, scan_id, vuln).await
+                    {
+                        tracing::warn!("Failed to store completion-time vulnerability: {}", e);
+                    } else {
+                        stored_vuln_keys.insert(dedup_key);
+                    }
                 }
 
                 let risk_score = calculate_risk_score(&status_response.vulnerabilities);
@@ -909,6 +826,29 @@ async fn poll_scan_status(state: AppState, scan_id: Uuid, remote_scan_id: String
                     tracing::error!("Failed to mark scan as completed: {}", e);
                 }
 
+                let summary_payload = serde_json::json!({
+                    "status": "completed",
+                    "scan_id": scan_id,
+                    "remote_scan_id": remote_scan_id,
+                    "progress": status_response.progress,
+                    "probes_completed": status_response.probes_completed,
+                    "probes_total": status_response.probes_total,
+                    "vulnerabilities_found": status_response.vulnerabilities_found,
+                    "risk_score": risk_score,
+                });
+                if let Err(e) = append_scan_chain_block(
+                    &state.db,
+                    org_id,
+                    scan_id,
+                    "scan_summary",
+                    Some(scan_id),
+                    &summary_payload,
+                )
+                .await
+                {
+                    tracing::warn!("Failed to append scan summary chain block: {}", e);
+                }
+
                 tracing::info!(
                     "Scan {} completed with {} vulnerabilities (risk score: {:.2}), {} probe logs stored",
                     scan_id,
@@ -920,13 +860,166 @@ async fn poll_scan_status(state: AppState, scan_id: Uuid, remote_scan_id: String
             }
             "failed" => {
                 mark_scan_failed(&state, scan_id, &status_response.error_message).await;
+                let failed_payload = serde_json::json!({
+                    "status": "failed",
+                    "scan_id": scan_id,
+                    "remote_scan_id": remote_scan_id,
+                    "error_message": status_response.error_message,
+                    "progress": status_response.progress,
+                });
+                if let Err(e) = append_scan_chain_block(
+                    &state.db,
+                    org_id,
+                    scan_id,
+                    "scan_failed",
+                    Some(scan_id),
+                    &failed_payload,
+                )
+                .await
+                {
+                    tracing::warn!("Failed to append failed-scan chain block: {}", e);
+                }
                 tracing::error!("Scan {} failed: {}", scan_id, status_response.error_message);
                 break;
             }
-            _ => {
-            }
+            _ => {}
         }
     }
+}
+
+async fn insert_scan_result_with_chain(
+    state: &AppState,
+    org_id: Uuid,
+    scan_id: Uuid,
+    vuln: &crate::grpc::ml_client::VulnerabilityInfo,
+) -> Result<Uuid, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO scan_result (
+            scan_id, probe_name, category, severity, description,
+            attack_prompt, model_response, recommendation,
+            success_rate, detector_name, probe_class, probe_duration_ms
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING id
+        "#,
+    )
+    .bind(scan_id)
+    .bind(&vuln.probe_name)
+    .bind(&vuln.category)
+    .bind(&vuln.severity)
+    .bind(&vuln.description)
+    .bind(&vuln.attack_prompt)
+    .bind(&vuln.model_response)
+    .bind(&vuln.recommendation)
+    .bind(vuln.success_rate)
+    .bind(&vuln.detector_name)
+    .bind(&vuln.probe_class)
+    .bind(vuln.probe_duration_ms)
+    .fetch_one(&state.db)
+    .await?;
+
+    let result_id: Uuid = row.get("id");
+    let payload = serde_json::json!({
+        "scan_id": scan_id,
+        "scan_result_id": result_id,
+        "type": "vulnerability",
+        "vulnerability": vuln,
+    });
+
+    if let Err(e) = append_scan_chain_block(
+        &state.db,
+        org_id,
+        scan_id,
+        "scan_result",
+        Some(result_id),
+        &payload,
+    )
+    .await
+    {
+        tracing::warn!(
+            "Failed to append chain block for scan_result {}: {}",
+            result_id,
+            e
+        );
+    }
+
+    Ok(result_id)
+}
+
+async fn insert_scan_log_with_chain(
+    state: &AppState,
+    org_id: Uuid,
+    scan_id: Uuid,
+    plog: &crate::grpc::ml_client::ProbeLogInfo,
+) -> Result<Uuid, sqlx::Error> {
+    let log_entries_json = serde_json::to_value(&plog.log_lines).unwrap_or(serde_json::json!([]));
+    let detector_scores_json =
+        serde_json::to_value(&plog.detector_scores).unwrap_or(serde_json::json!([]));
+
+    let row = sqlx::query(
+        r#"
+        INSERT INTO scan_log (
+            scan_id, probe_name, probe_class, status,
+            started_at, completed_at, duration_ms,
+            prompts_sent, prompts_passed, prompts_failed,
+            detector_name, detector_scores, error_message, log_entries
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        RETURNING id
+        "#,
+    )
+    .bind(scan_id)
+    .bind(&plog.probe_name)
+    .bind(&plog.probe_class)
+    .bind(&plog.status)
+    .bind(chrono::DateTime::from_timestamp_millis(plog.started_at_ms).map(|dt| dt.naive_utc()))
+    .bind(if plog.completed_at_ms > 0 {
+        chrono::DateTime::from_timestamp_millis(plog.completed_at_ms).map(|dt| dt.naive_utc())
+    } else {
+        None
+    })
+    .bind(plog.duration_ms)
+    .bind(plog.prompts_sent)
+    .bind(plog.prompts_passed)
+    .bind(plog.prompts_failed)
+    .bind(&plog.detector_name)
+    .bind(&detector_scores_json)
+    .bind(if plog.error_message.is_empty() {
+        None
+    } else {
+        Some(&plog.error_message)
+    })
+    .bind(&log_entries_json)
+    .fetch_one(&state.db)
+    .await?;
+
+    let log_id: Uuid = row.get("id");
+    let payload = serde_json::json!({
+        "scan_id": scan_id,
+        "scan_log_id": log_id,
+        "type": "probe_log",
+        "probe_log": plog,
+    });
+
+    if let Err(e) = append_scan_chain_block(
+        &state.db,
+        org_id,
+        scan_id,
+        "scan_log",
+        Some(log_id),
+        &payload,
+    )
+    .await
+    {
+        tracing::warn!(
+            "Failed to append chain block for scan_log {}: {}",
+            log_id,
+            e
+        );
+    }
+
+    Ok(log_id)
 }
 
 #[derive(Debug, Serialize)]
@@ -1080,7 +1173,6 @@ fn calculate_risk_score(vulnerabilities: &[crate::grpc::ml_client::Vulnerability
 
     (score / vulnerabilities.len() as f32).min(1.0)
 }
-
 
 #[derive(Debug, Deserialize)]
 pub struct ListScansParams {
@@ -1831,7 +1923,6 @@ pub async fn list_probes(
             .collect(),
     }))
 }
-
 
 pub async fn scan_events(
     State(state): State<AppState>,
