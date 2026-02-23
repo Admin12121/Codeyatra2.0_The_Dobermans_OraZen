@@ -2,8 +2,8 @@
 name = "server"
 version = "0.1.0"
 edition = "2024"
-description = "Orafinite AI Security Platform - Backend API"
-authors = ["Orafinite Team"]
+description = "Orazen AI Security Platform - Backend API"
+authors = ["Orazen Team"]
 
 [dependencies]
 # Web Framework

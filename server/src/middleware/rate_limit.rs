@@ -29,6 +29,41 @@ pub async fn check_rate_limit(
     Ok((true, remaining, ttl.max(0) as u64))
 }
 
+pub async fn check_rate_limit_with_cost(
+    redis_conn: &mut redis::aio::ConnectionManager,
+    key: &str,
+    max_requests: u32,
+    window_seconds: u64,
+    cost: u32,
+) -> Result<(bool, u32, u64), redis::RedisError> {
+    if cost == 0 {
+        return check_rate_limit(redis_conn, key, max_requests, window_seconds).await;
+    }
+
+    let cache_key = format!("ratelimit:{}", key);
+    let current: u32 = redis_conn.get(&cache_key).await.unwrap_or(0);
+    let projected = current.saturating_add(cost);
+
+    if projected > max_requests {
+        let ttl: i64 = redis_conn.ttl(&cache_key).await.unwrap_or(0);
+        let remaining = max_requests.saturating_sub(current);
+        return Ok((false, remaining, ttl.max(0) as u64));
+    }
+
+    let new_count: u32 = redis_conn.incr(&cache_key, cost).await?;
+    if new_count == cost {
+        let _: () = redis_conn.expire(&cache_key, window_seconds as i64).await?;
+    }
+
+    let ttl: i64 = redis_conn
+        .ttl(&cache_key)
+        .await
+        .unwrap_or(window_seconds as i64);
+    let remaining = max_requests.saturating_sub(new_count);
+
+    Ok((true, remaining, ttl.max(0) as u64))
+}
+
 pub fn rate_limit_key(api_key: Option<&str>, ip: Option<&str>) -> String {
     if let Some(key) = api_key {
         let key_prefix = if key.len() > 16 { &key[..16] } else { key };
