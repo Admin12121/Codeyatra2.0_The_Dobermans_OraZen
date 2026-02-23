@@ -22,6 +22,7 @@ export interface CreateModelInput {
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  /** Optional JSON settings (e.g. custom endpoint config for self-hosted models) */
   settings?: Record<string, unknown>;
   isDefault?: boolean;
 }
@@ -32,8 +33,11 @@ export interface UpdateModelInput {
   model?: string;
   apiKey?: string;
   baseUrl?: string;
+  /** Optional JSON settings (e.g. custom endpoint config for self-hosted models) */
   settings?: Record<string, unknown>;
+  /** Set to true to explicitly clear the API key */
   clearApiKey?: boolean;
+  /** Set to true to explicitly clear the base URL */
   clearBaseUrl?: boolean;
 }
 
@@ -63,6 +67,10 @@ function mapModelConfig(m: {
   };
 }
 
+/**
+ * Create a new model configuration
+ * Calls Rust API: POST /v1/models
+ */
 export async function createModelConfig(
   input: CreateModelInput,
 ): Promise<ModelConfig> {
@@ -81,6 +89,10 @@ export async function createModelConfig(
   return mapModelConfig(data);
 }
 
+/**
+ * Update an existing model configuration
+ * Calls Rust API: PUT /v1/models/{modelId}
+ */
 export async function updateModelConfig(
   modelId: string,
   input: UpdateModelInput,
@@ -102,6 +114,10 @@ export async function updateModelConfig(
   return mapModelConfig(data);
 }
 
+/**
+ * List all model configurations for the current organization
+ * Calls Rust API: GET /v1/models
+ */
 export async function listModelConfigs(): Promise<ModelConfig[]> {
   const { data, error } = await modelsApi.list();
   if (error) {
@@ -111,6 +127,10 @@ export async function listModelConfigs(): Promise<ModelConfig[]> {
   return data.models.map(mapModelConfig);
 }
 
+/**
+ * Delete a model configuration
+ * Calls Rust API: DELETE /v1/models/{modelId}
+ */
 export async function deleteModelConfig(modelId: string): Promise<boolean> {
   const { data, error } = await modelsApi.delete(modelId);
   if (error) {
@@ -119,7 +139,10 @@ export async function deleteModelConfig(modelId: string): Promise<boolean> {
   return data.success;
 }
 
-
+/**
+ * Set a model as default
+ * Calls Rust API: PUT /v1/models/{modelId}/default
+ */
 export async function setDefaultModel(modelId: string): Promise<boolean> {
   const { data, error } = await modelsApi.setDefault(modelId);
   if (error) {

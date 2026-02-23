@@ -120,6 +120,10 @@ export interface ProbeListResult {
   probes: GarakProbeInfo[];
 }
 
+/**
+ * Start a new vulnerability scan via Rust API
+ * Calls Rust API: POST /v1/scan/start
+ */
 export async function startScan(input: StartScanInput): Promise<
   | {
       scanId: string;
@@ -152,7 +156,10 @@ export async function startScan(input: StartScanInput): Promise<
   };
 }
 
-
+/**
+ * Cancel a running scan via Rust API
+ * Calls Rust API: POST /v1/scan/{scanId}/cancel
+ */
 export async function cancelScan(
   scanId: string,
 ): Promise<{ status: string; message: string } | { error: string }> {
@@ -168,7 +175,10 @@ export async function cancelScan(
   };
 }
 
-
+/**
+ * Get scan status via Rust API
+ * Calls Rust API: GET /v1/scan/{scanId}
+ */
 export async function getScanStatus(scanId: string): Promise<
   | {
       scanId: string;
@@ -198,7 +208,10 @@ export async function getScanStatus(scanId: string): Promise<
   };
 }
 
-
+/**
+ * List recent scans for the current user
+ * Calls Rust API: GET /v1/scan/list
+ */
 export async function listScans(limit = 20): Promise<Scan[]> {
   const { data, error } = await scanApi.listScans(limit);
   if (error) {
@@ -224,7 +237,10 @@ export async function listScans(limit = 20): Promise<Scan[]> {
   }));
 }
 
-
+/**
+ * Get scan results
+ * Calls Rust API: GET /v1/scan/{scanId}/results
+ */
 export async function getScanResults(scanId: string): Promise<ScanResult[]> {
   const { data, error } = await scanApi.getScanResults(scanId);
   if (error) {
@@ -250,7 +266,10 @@ export async function getScanResults(scanId: string): Promise<ScanResult[]> {
   }));
 }
 
-
+/**
+ * Retest a specific vulnerability by re-running the same attack prompt multiple times
+ * Calls Rust API: POST /v1/scan/retest
+ */
 export async function retestVulnerability(
   input: RetestInput,
 ): Promise<RetestResult | { error: string }> {
@@ -290,7 +309,14 @@ export async function retestVulnerability(
   };
 }
 
-
+/**
+ * Get detailed per-probe execution logs for a scan
+ * Calls Rust API: GET /v1/scan/{scanId}/logs
+ */
+/**
+ * List all available Garak probes with metadata for the probe picker UI
+ * Calls Rust API: GET /v1/scan/probes
+ */
 export async function listProbes(): Promise<ProbeListResult> {
   const { data, error } = await scanApi.listProbes();
   if (error) {

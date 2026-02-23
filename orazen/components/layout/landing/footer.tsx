@@ -15,13 +15,13 @@ const Footer = () => {
               <Image src="/official/logo.png" alt="logo" width={32} height={32} />
               Orazen
             </Link>
-            <p className="text-sm font-normal text-stone-500 dark:text-stone-600">
+            <p className="text-sm font-normal text-muted-foreground">
               Orazen is a self-hosted AI safety platform designed to improve
               accessibility, inclusiveness, and equitable participation in
               AI-powered digital services.
             </p>
           </div>
-          <p className="text-xs font-normal text-stone-400">
+          <p className="text-xs font-normal text-muted-foreground/80">
             Copyright 2026 | Orazen
           </p>
         </div>

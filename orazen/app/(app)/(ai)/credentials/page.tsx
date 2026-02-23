@@ -55,6 +55,12 @@ interface ApiKeyDisplay {
 }
 
 type ScanMode = "prompt_only" | "output_only" | "both";
+type GuardPresetId =
+  | "health"
+  | "financial"
+  | "education"
+  | "government"
+  | "custom";
 
 interface ScannerEntry {
   enabled: boolean;
@@ -62,23 +68,28 @@ interface ScannerEntry {
   settingsJson: string;
 }
 
+interface LocalGuardConfigState {
+  scanMode: ScanMode;
+  inputScanners: Record<string, ScannerEntry>;
+  outputScanners: Record<string, ScannerEntry>;
+  sanitize: boolean;
+  failFast: boolean;
+}
 
-const DEFAULT_INPUT_SCANNERS: InputScannerName[] = [
-  "prompt_injection",
-  "toxicity",
-  "anonymize",
-  "secrets",
-  "gibberish",
-  "invisible_text",
-];
-
-const DEFAULT_OUTPUT_SCANNERS: OutputScannerName[] = [
-  "sensitive",
-  "toxicity",
-  "malicious_urls",
-  "bias",
-  "deanonymize",
-];
+interface GuardPresetDefinition {
+  id: Exclude<GuardPresetId, "custom">;
+  label: string;
+  description: string;
+  scanMode: ScanMode;
+  sanitize: boolean;
+  failFast: boolean;
+  inputScanners: InputScannerName[];
+  outputScanners: OutputScannerName[];
+  inputThresholds?: Partial<Record<InputScannerName, number>>;
+  outputThresholds?: Partial<Record<OutputScannerName, number>>;
+  inputSettings?: Partial<Record<InputScannerName, string>>;
+  outputSettings?: Partial<Record<OutputScannerName, string>>;
+}
 
 const CATEGORY_COLORS: Record<string, string> = {
   Security: "bg-red-500/15 text-red-400 border-red-500/30",
@@ -331,18 +342,6 @@ const INPUT_SCANNER_THRESHOLDS: Partial<Record<InputScannerName, number>> = {
   sentiment: 0.5,
 };
 
-function buildDefaultInputScanners(): Record<string, ScannerEntry> {
-  const entries: Record<string, ScannerEntry> = {};
-  for (const name of ALL_INPUT_SCANNERS) {
-    entries[name] = {
-      enabled: DEFAULT_INPUT_SCANNERS.includes(name),
-      threshold: INPUT_SCANNER_THRESHOLDS[name] ?? 0.5,
-      settingsJson: "",
-    };
-  }
-  return entries;
-}
-
 const OUTPUT_SCANNER_THRESHOLDS: Partial<Record<OutputScannerName, number>> = {
   toxicity: 0.7,
   bias: 0.7,
@@ -350,25 +349,232 @@ const OUTPUT_SCANNER_THRESHOLDS: Partial<Record<OutputScannerName, number>> = {
   sentiment: 0.5,
 };
 
-function buildDefaultOutputScanners(): Record<string, ScannerEntry> {
+function buildInputScanners(
+  enabledScanners: InputScannerName[],
+  thresholds: Partial<Record<InputScannerName, number>> = {},
+  settings: Partial<Record<InputScannerName, string>> = {},
+): Record<string, ScannerEntry> {
+  const enabled = new Set(enabledScanners);
   const entries: Record<string, ScannerEntry> = {};
-  for (const name of ALL_OUTPUT_SCANNERS) {
+  for (const name of ALL_INPUT_SCANNERS) {
     entries[name] = {
-      enabled: DEFAULT_OUTPUT_SCANNERS.includes(name),
-      threshold: OUTPUT_SCANNER_THRESHOLDS[name] ?? 0.5,
-      settingsJson: "",
+      enabled: enabled.has(name),
+      threshold: thresholds[name] ?? INPUT_SCANNER_THRESHOLDS[name] ?? 0.5,
+      settingsJson: settings[name] ?? "",
     };
   }
   return entries;
 }
 
-function guardConfigToLocal(gc: GuardConfig): {
-  scanMode: ScanMode;
-  inputScanners: Record<string, ScannerEntry>;
-  outputScanners: Record<string, ScannerEntry>;
-  sanitize: boolean;
-  failFast: boolean;
-} {
+function buildOutputScanners(
+  enabledScanners: OutputScannerName[],
+  thresholds: Partial<Record<OutputScannerName, number>> = {},
+  settings: Partial<Record<OutputScannerName, string>> = {},
+): Record<string, ScannerEntry> {
+  const enabled = new Set(enabledScanners);
+  const entries: Record<string, ScannerEntry> = {};
+  for (const name of ALL_OUTPUT_SCANNERS) {
+    entries[name] = {
+      enabled: enabled.has(name),
+      threshold: thresholds[name] ?? OUTPUT_SCANNER_THRESHOLDS[name] ?? 0.5,
+      settingsJson: settings[name] ?? "",
+    };
+  }
+  return entries;
+}
+
+const GUARD_PRESETS: Record<Exclude<GuardPresetId, "custom">, GuardPresetDefinition> = {
+  health: {
+    id: "health",
+    label: "Health",
+    description: "PII, injection, and harmful output controls for patient safety.",
+    scanMode: "both",
+    sanitize: true,
+    failFast: true,
+    inputScanners: [
+      "anonymize",
+      "prompt_injection",
+      "secrets",
+      "toxicity",
+      "invisible_text",
+      "token_limit",
+      "gibberish",
+    ],
+    outputScanners: [
+      "sensitive",
+      "toxicity",
+      "bias",
+      "malicious_urls",
+      "factual_consistency",
+      "relevance",
+    ],
+    inputThresholds: {
+      anonymize: 0.4,
+      prompt_injection: 0.45,
+      secrets: 0.4,
+      toxicity: 0.55,
+      token_limit: 0.5,
+    },
+    outputThresholds: {
+      sensitive: 0.45,
+      toxicity: 0.55,
+      bias: 0.6,
+      malicious_urls: 0.45,
+      factual_consistency: 0.6,
+      relevance: 0.55,
+    },
+  },
+  financial: {
+    id: "financial",
+    label: "Financial",
+    description: "Stricter fraud and data-leak posture for regulated transactions.",
+    scanMode: "both",
+    sanitize: true,
+    failFast: true,
+    inputScanners: [
+      "prompt_injection",
+      "secrets",
+      "anonymize",
+      "invisible_text",
+      "token_limit",
+      "toxicity",
+      "language",
+    ],
+    outputScanners: [
+      "sensitive",
+      "malicious_urls",
+      "json",
+      "factual_consistency",
+      "relevance",
+      "toxicity",
+    ],
+    inputThresholds: {
+      prompt_injection: 0.4,
+      secrets: 0.35,
+      anonymize: 0.4,
+      token_limit: 0.5,
+      language: 0.55,
+    },
+    outputThresholds: {
+      sensitive: 0.4,
+      malicious_urls: 0.4,
+      json: 0.6,
+      factual_consistency: 0.65,
+      relevance: 0.6,
+    },
+  },
+  education: {
+    id: "education",
+    label: "Education",
+    description: "Balanced classroom-safe defaults with quality-focused output checks.",
+    scanMode: "both",
+    sanitize: false,
+    failFast: false,
+    inputScanners: [
+      "prompt_injection",
+      "toxicity",
+      "gibberish",
+      "language",
+      "invisible_text",
+    ],
+    outputScanners: [
+      "toxicity",
+      "bias",
+      "relevance",
+      "factual_consistency",
+      "language_same",
+      "reading_time",
+    ],
+    inputThresholds: {
+      prompt_injection: 0.5,
+      toxicity: 0.65,
+      language: 0.6,
+    },
+    outputThresholds: {
+      toxicity: 0.65,
+      bias: 0.7,
+      relevance: 0.6,
+      factual_consistency: 0.65,
+      reading_time: 0.6,
+    },
+  },
+  government: {
+    id: "government",
+    label: "Government",
+    description: "High-assurance baseline for public-sector security and compliance.",
+    scanMode: "both",
+    sanitize: true,
+    failFast: true,
+    inputScanners: [
+      "prompt_injection",
+      "secrets",
+      "anonymize",
+      "invisible_text",
+      "token_limit",
+      "toxicity",
+      "language",
+      "gibberish",
+    ],
+    outputScanners: [
+      "sensitive",
+      "malicious_urls",
+      "json",
+      "factual_consistency",
+      "relevance",
+      "toxicity",
+      "url_reachability",
+      "bias",
+    ],
+    inputThresholds: {
+      prompt_injection: 0.4,
+      secrets: 0.35,
+      anonymize: 0.4,
+      toxicity: 0.55,
+      token_limit: 0.45,
+    },
+    outputThresholds: {
+      sensitive: 0.4,
+      malicious_urls: 0.4,
+      json: 0.65,
+      factual_consistency: 0.7,
+      relevance: 0.65,
+      toxicity: 0.6,
+      url_reachability: 0.6,
+      bias: 0.65,
+    },
+  },
+};
+
+const PRESET_BUTTON_ORDER: GuardPresetId[] = [
+  "health",
+  "financial",
+  "education",
+  "government",
+  "custom",
+];
+
+function buildPresetLocalState(
+  presetId: Exclude<GuardPresetId, "custom">,
+): LocalGuardConfigState {
+  const preset = GUARD_PRESETS[presetId];
+  return {
+    scanMode: preset.scanMode,
+    inputScanners: buildInputScanners(
+      preset.inputScanners,
+      preset.inputThresholds,
+      preset.inputSettings,
+    ),
+    outputScanners: buildOutputScanners(
+      preset.outputScanners,
+      preset.outputThresholds,
+      preset.outputSettings,
+    ),
+    sanitize: preset.sanitize,
+    failFast: preset.failFast,
+  };
+}
+
+function guardConfigToLocal(gc: GuardConfig): LocalGuardConfigState {
   const inputScanners: Record<string, ScannerEntry> = {};
   for (const name of ALL_INPUT_SCANNERS) {
     const remote = gc.input_scanners[name];
@@ -578,26 +784,38 @@ function GuardConfigPanel({
   const hasExisting = initialConfig !== null;
   const defaults = hasExisting
     ? guardConfigToLocal(initialConfig)
-    : {
-        scanMode: "prompt_only" as ScanMode,
-        inputScanners: buildDefaultInputScanners(),
-        outputScanners: buildDefaultOutputScanners(),
-        sanitize: false,
-        failFast: false,
-      };
+    : buildPresetLocalState("health");
 
   const [scanMode, setScanMode] = useState<ScanMode>(defaults.scanMode);
   const [inputScanners, setInputScanners] = useState(defaults.inputScanners);
   const [outputScanners, setOutputScanners] = useState(defaults.outputScanners);
   const [sanitize, setSanitize] = useState(defaults.sanitize);
   const [failFast, setFailFast] = useState(defaults.failFast);
+  const [selectedPreset, setSelectedPreset] = useState<GuardPresetId>(
+    hasExisting ? "custom" : "health",
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [inputFilter, setInputFilter] = useState("");
   const [outputFilter, setOutputFilter] = useState("");
 
+  const applyPreset = useCallback((presetId: GuardPresetId) => {
+    setSelectedPreset(presetId);
+    if (presetId === "custom") {
+      return;
+    }
+
+    const next = buildPresetLocalState(presetId);
+    setScanMode(next.scanMode);
+    setInputScanners(next.inputScanners);
+    setOutputScanners(next.outputScanners);
+    setSanitize(next.sanitize);
+    setFailFast(next.failFast);
+  }, []);
+
   const updateInput = useCallback(
     (name: string, patch: Partial<ScannerEntry>) => {
+      setSelectedPreset("custom");
       setInputScanners((prev) => ({
         ...prev,
         [name]: { ...prev[name], ...patch },
@@ -608,6 +826,7 @@ function GuardConfigPanel({
 
   const updateOutput = useCallback(
     (name: string, patch: Partial<ScannerEntry>) => {
+      setSelectedPreset("custom");
       setOutputScanners((prev) => ({
         ...prev,
         [name]: { ...prev[name], ...patch },
@@ -617,6 +836,7 @@ function GuardConfigPanel({
   );
 
   const toggleAllInput = useCallback((enabled: boolean) => {
+    setSelectedPreset("custom");
     setInputScanners((prev) => {
       const next = { ...prev };
       for (const key of Object.keys(next)) {
@@ -627,6 +847,7 @@ function GuardConfigPanel({
   }, []);
 
   const toggleAllOutput = useCallback((enabled: boolean) => {
+    setSelectedPreset("custom");
     setOutputScanners((prev) => {
       const next = { ...prev };
       for (const key of Object.keys(next)) {
@@ -724,6 +945,43 @@ function GuardConfigPanel({
       </div>
 
       <div className="p-5 space-y-5">
+        <div className="space-y-2">
+          <Label className="text-xs font-mono uppercase text-stone-500">
+            Config Theme
+          </Label>
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-1.5">
+            {PRESET_BUTTON_ORDER.map((presetId) => {
+              const isCustom = presetId === "custom";
+              const preset = isCustom
+                ? {
+                    label: "Custom",
+                    description: "Manual scanner selection and thresholds.",
+                  }
+                : GUARD_PRESETS[presetId];
+
+              return (
+                <button
+                  key={presetId}
+                  onClick={() => applyPreset(presetId)}
+                  className={`px-3 py-2 rounded-lg border text-left transition-colors ${
+                    selectedPreset === presetId
+                      ? "bg-lime-500/20 border-lime-500 text-lime-400"
+                      : "border-stone-300 text-stone-500 hover:text-stone-700"
+                  }`}
+                >
+                  <p className="text-[11px] font-mono uppercase">{preset.label}</p>
+                  <p className="text-[10px] text-stone-500 truncate">
+                    {preset.description}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-stone-600">
+            Pick a recommended baseline, then fine-tune any scanner below.
+          </p>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label className="text-xs font-mono uppercase text-stone-500">
@@ -734,36 +992,36 @@ function GuardConfigPanel({
                 [
                   {
                     mode: "prompt_only" as ScanMode,
-                    label: "Prompt Only",
-                    icon: "→",
+                    label: "Input Only",
                   },
                   {
                     mode: "output_only" as ScanMode,
                     label: "Output Only",
-                    icon: "←",
                   },
-                  { mode: "both" as ScanMode, label: "Both", icon: "⇄" },
+                  { mode: "both" as ScanMode, label: "Both", icon: "BOTH" },
                 ] as const
-              ).map(({ mode, label, icon }) => (
+              ).map(({ mode, label }) => (
                 <button
                   key={mode}
-                  onClick={() => setScanMode(mode)}
+                  onClick={() => {
+                    setSelectedPreset("custom");
+                    setScanMode(mode);
+                  }}
                   className={`flex-1 px-3 py-2 text-xs font-mono uppercase rounded-lg border transition-colors ${
                     scanMode === mode
                       ? "bg-lime-500/20 border-lime-500 text-lime-400"
                       : "border-stone-300 text-stone-500 hover:text-stone-700"
                   }`}
                 >
-                  <span className="mr-1">{icon}</span>
                   {label}
                 </button>
               ))}
             </div>
             <p className="text-[10px] text-stone-600">
               {scanMode === "prompt_only" &&
-                'API callers just send {"prompt": "..."} — no extra headers needed'}
+                'API callers just send {"prompt": "..."} - no extra headers needed'}
               {scanMode === "output_only" &&
-                'API callers just send {"output": "..."} — no extra headers needed'}
+                'API callers just send {"output": "..."} - no extra headers needed'}
               {scanMode === "both" &&
                 "Callers must send X-Scan-Type header (prompt / output / both) to specify what to scan"}
             </p>
@@ -778,7 +1036,10 @@ function GuardConfigPanel({
                 <input
                   type="checkbox"
                   checked={sanitize}
-                  onChange={(e) => setSanitize(e.target.checked)}
+                  onChange={(e) => {
+                    setSelectedPreset("custom");
+                    setSanitize(e.target.checked);
+                  }}
                   className="rounded border-stone-300 accent-lime-500"
                 />
                 <span className="text-xs text-stone-400">
@@ -789,7 +1050,10 @@ function GuardConfigPanel({
                 <input
                   type="checkbox"
                   checked={failFast}
-                  onChange={(e) => setFailFast(e.target.checked)}
+                  onChange={(e) => {
+                    setSelectedPreset("custom");
+                    setFailFast(e.target.checked);
+                  }}
                   className="rounded border-stone-300 accent-lime-500"
                 />
                 <span className="text-xs text-stone-400">
@@ -985,10 +1249,10 @@ function ConfigBadge({ config }: { config: GuardConfig | null }) {
 
   const modeLabel =
     config.scan_mode === "prompt_only"
-      ? "→ Prompt"
+      ? "Input"
       : config.scan_mode === "output_only"
-        ? "← Output"
-        : "⇄ Both";
+        ? "Output"
+        : "Both";
 
   const inputCount = Object.values(config.input_scanners).filter(
     (s) => s.enabled,
@@ -1023,6 +1287,7 @@ export default function CredentialsPage() {
   const [newKey, setNewKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [selectedLang, setSelectedLang] = useState("curl");
   const [codeCopied, setCodeCopied] = useState(false);
@@ -1034,11 +1299,7 @@ export default function CredentialsPage() {
     setCodeSnippets(buildCodeSnippets(window.location.origin));
   }, []);
 
-  useEffect(() => {
-    loadKeys();
-  }, []);
-
-  const loadKeys = async () => {
+  const loadKeys = useCallback(async () => {
     try {
       const result = await listApiKeys();
       setKeys(
@@ -1054,17 +1315,30 @@ export default function CredentialsPage() {
     } catch (err) {
       console.error("Failed to load API keys:", err);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void loadKeys();
+  }, [loadKeys]);
 
   const handleCreate = async () => {
     if (!newKeyName.trim()) return;
     setIsCreating(true);
+    setCreateError(null);
     try {
-      const result = await createApiKey(newKeyName);
+      const result = await createApiKey(newKeyName.trim());
+      if (!result.ok) {
+        setCreateError(result.error);
+        return;
+      }
+
       setNewKey(result.key);
       setNewKeyName("");
-      loadKeys();
+      await loadKeys();
     } catch (err) {
+      setCreateError(
+        err instanceof Error ? err.message : "Failed to create API key",
+      );
       console.error("Failed to create API key:", err);
     } finally {
       setIsCreating(false);
@@ -1077,7 +1351,7 @@ export default function CredentialsPage() {
         setConfiguringKeyId(null);
       }
       await revokeApiKey(keyId);
-      loadKeys();
+      await loadKeys();
     } catch (err) {
       console.error("Failed to revoke API key:", err);
     }
@@ -1114,6 +1388,7 @@ export default function CredentialsPage() {
         </p>
       </div>
 
+      {/* Create New Key */}
       <div className="flex flex-col gap-6">
         <div className="flex gap-4 items-center">
           <div className="flex gap-2 items-center">
@@ -1152,6 +1427,9 @@ export default function CredentialsPage() {
               >
                 {isCreating ? "Creating..." : "Create API Key"}
               </Button>
+              {createError && (
+                <p className="text-sm text-red-500">{createError}</p>
+              )}
             </div>
           </div>
         )}

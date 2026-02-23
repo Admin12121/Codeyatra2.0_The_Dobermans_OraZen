@@ -1,4 +1,12 @@
+// ============================================================
+// Scanner Metadata Constants
+// ============================================================
+// This file contains ONLY pure constants and types with NO
+// server-side imports (no next/headers, no postgres, no auth).
+// Safe to import from both server and client components.
+// ============================================================
 
+/** All available input (prompt) scanner names */
 export const ALL_INPUT_SCANNERS = [
   "anonymize",
   "ban_code",
@@ -17,6 +25,7 @@ export const ALL_INPUT_SCANNERS = [
   "toxicity",
 ] as const;
 
+/** All available output scanner names */
 export const ALL_OUTPUT_SCANNERS = [
   "ban_code",
   "ban_competitors",
@@ -44,6 +53,7 @@ export const ALL_OUTPUT_SCANNERS = [
 export type InputScannerName = (typeof ALL_INPUT_SCANNERS)[number];
 export type OutputScannerName = (typeof ALL_OUTPUT_SCANNERS)[number];
 
+/** Human-readable labels and descriptions for every scanner */
 export const SCANNER_META: Record<
   string,
   {

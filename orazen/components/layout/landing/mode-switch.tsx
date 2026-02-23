@@ -80,7 +80,10 @@ export const ModeSwitcher = ({
     <button
       ref={buttonRef}
       onClick={toggleTheme}
-      className={cn(className)}
+      className={cn(
+        "rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground",
+        className,
+      )}
       {...props}
     >
       <MoonIcon className="relative hidden after:absolute after:-inset-2 [html.dark_&]:block" />

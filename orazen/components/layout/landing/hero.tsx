@@ -11,7 +11,7 @@ const Hero = () => {
         <div className="flex flex-row items-center gap-2 px-6">
           <div className="bg-muted/20 relative flex h-7 w-16 flex-row items-center gap-2 rounded-md border px-2">
             <span className="urbanist absolute right-3 text-sm font-semibold">
-              48h
+              
             </span>
           </div>
           <div className="flex flex-row items-center">
@@ -20,15 +20,15 @@ const Hero = () => {
           </div>
         </div>
         <div className="instrument-serif flex flex-col gap-2 px-6 text-6xl">
-          <h1 className="dark:text-primary-foreground/30 text-secondary-foreground/50">
+          <h1 className="text-foreground/75">
             Build Safer{" "}
-            <span className="dark:text-primary-foreground text-secondary-foreground">
+            <span className="text-foreground">
               Digital Access
             </span>{" "}
             For
           </h1>
-          <h2 className="dark:text-primary-foreground/30 text-secondary-foreground/50">
-            <span className="dark:text-primary-foreground text-secondary-foreground">
+          <h2 className="text-foreground/75">
+            <span className="text-foreground">
               Everyone
             </span>{" "}
             with AI.
@@ -56,10 +56,10 @@ const Hero = () => {
                 </svg>
               </Button>
             </Link>
-            <span className="jetbrains-mono text-muted-foreground/20 pointer-events-none absolute -top-10 left-40 size-full -rotate-34 text-[10px]">
+            <span className="jetbrains-mono text-muted-foreground/55 pointer-events-none absolute -top-10 left-40 size-full -rotate-34 text-[10px]">
               15+ guard scanners <br /> 150+ red-team probes <br /> reduced access barriers
             </span>
-            <ScribbledArrowToRight className="text-muted-foreground/20 pointer-events-none absolute top-2 left-22 size-full rotate-190" />
+            <ScribbledArrowToRight className="text-muted-foreground/55 pointer-events-none absolute top-2 left-22 size-full rotate-190" />
           </div>
         </div>
       </div>

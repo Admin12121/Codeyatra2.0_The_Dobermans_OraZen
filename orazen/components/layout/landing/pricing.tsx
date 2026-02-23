@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
 
 export interface TierPricing {
-  price: number;
+  price: number; // -1 = custom/contact
   tier: string;
   note?: string;
 }
@@ -108,7 +108,6 @@ export const sharedFeatures: string[] = [
   "Threat detection logs",
   "रू 0.15 / additional scan",
 ];
-
 function CheckIcon() {
   return (
     <svg
@@ -262,6 +261,7 @@ function AnimatedPrice({ value }: { value: number }) {
 
     rafRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(rafRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
   return (
@@ -321,7 +321,6 @@ function VolumeSlider({
 
   return (
     <div className="flex flex-col gap-6 w-full">
-      {/* Labels */}
       <div className="relative w-full h-5">
         {tiers.map((t, i) => {
           const left = `${(i / max) * 100}%`;
@@ -614,7 +613,7 @@ export function PricingCore({
     (pricing: TierPricing, column: PricingColumnType) => {
       if (pricing.price === -1) {
         window.location.href =
-          "mailto:sales@Orazen.com?subject=Enterprise%20Plan%20Inquiry";
+          "mailto:sales@orazen.com?subject=Enterprise%20Plan%20Inquiry";
         return;
       }
 
@@ -801,97 +800,12 @@ export function PricingCore({
   );
 }
 
-const stageOneBreakdown = [
-  "Code Quality and Execution: 30 marks",
-  "Innovation and Impact: 30 marks",
-  "Mentor Evaluation and Team Collaboration: 10 marks",
-];
-
-const stageTwoBreakdown = [
-  "Clarity and Structure: 5 marks",
-  "Engagement and Storytelling: 5 marks",
-  "Handling Q and A: 5 marks",
-  "Business and Impact Understanding: 5 marks",
-];
 
 const Pricing = () => {
   return (
-    <section
-      id="rubric"
-      className="mt-30 flex flex-col gap-6 border-b border-stone-200 px-4 py-10 dark:border-zinc-800 md:px-6"
-    >
-      <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-2 text-center">
-        <p className="font-mono text-xs uppercase leading-4 text-stone-800 dark:text-zinc-300">
-          Judging Criteria Snapshot
-        </p>
-        <p className="cooper text-2xl font-normal text-stone-800 dark:text-white">
-          Build with the scorecard in mind
-        </p>
-        <p className="max-w-3xl text-sm leading-6 text-stone-600 dark:text-zinc-400">
-          Stage 1 shortlists the top 12 teams. Final winners are decided by
-          cumulative marks from both stages.
-        </p>
-      </div>
-
-      <div className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-4 md:grid-cols-2">
-        <article className="flex flex-col gap-3 border border-dashed px-4 py-5 md:px-6">
-          <div className="flex items-center justify-between">
-            <p className="font-mono text-xs uppercase text-stone-800 dark:text-zinc-200">
-              Stage 1
-            </p>
-            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-mono uppercase tracking-wide text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300">
-              70 Marks
-            </span>
-          </div>
-          <p className="text-sm font-semibold uppercase leading-5 text-stone-800 dark:text-white">
-            Technical Evaluation and Team Coordination
-          </p>
-          <ul className="flex flex-col gap-2">
-            {stageOneBreakdown.map((item) => (
-              <li
-                key={item}
-                className="text-sm leading-5 text-stone-600 dark:text-zinc-400"
-              >
-                {item}
-              </li>
-            ))}
-          </ul>
-        </article>
-
-        <article className="flex flex-col gap-3 border border-dashed px-4 py-5 md:px-6">
-          <div className="flex items-center justify-between">
-            <p className="font-mono text-xs uppercase text-stone-800 dark:text-zinc-200">
-              Stage 2
-            </p>
-            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-mono uppercase tracking-wide text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300">
-              20 Marks
-            </span>
-          </div>
-          <p className="text-sm font-semibold uppercase leading-5 text-stone-800 dark:text-white">
-            Final Presentation Round
-          </p>
-          <ul className="flex flex-col gap-2">
-            {stageTwoBreakdown.map((item) => (
-              <li
-                key={item}
-                className="text-sm leading-5 text-stone-600 dark:text-zinc-400"
-              >
-                {item}
-              </li>
-            ))}
-          </ul>
-        </article>
-      </div>
-
-      <div className="mx-auto flex w-full max-w-5xl items-center justify-between border border-dashed px-4 py-4 md:px-6">
-        <p className="font-mono text-xs uppercase text-stone-700 dark:text-zinc-300">
-          Grand Total
-        </p>
-        <p className="cooper text-xl text-stone-800 dark:text-white">
-          70 + 20 = 90 marks
-        </p>
-      </div>
-    </section>
+    <div className="mt-30 border-b border-stone-200 dark:border-zinc-800">
+      <PricingCore variant="landing" defaultIndex={2} />
+    </div>
   );
 };
 

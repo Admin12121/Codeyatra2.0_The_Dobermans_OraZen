@@ -106,7 +106,7 @@ export default function LoginPage() {
               <CardDescription>
                 {mode === "login"
                   ? "Sign in to your account"
-                  : "Get started with Orafinite"}
+                  : "Get started with Orazen"}
               </CardDescription>
             </CardHeader>
             <CardContent>

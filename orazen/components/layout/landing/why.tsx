@@ -41,10 +41,10 @@ const Why = () => {
   return (
     <section id="technical" className="mt-30 flex flex-col items-center gap-6">
       <div className="flex flex-col items-center gap-4 px-4 lg:px-6">
-        <p className="text-stone-800 font-normal text-xs uppercase font-mono leading-4">
+        <p className="text-muted-foreground font-normal text-xs uppercase font-mono leading-4">
           Theme Alignment
         </p>
-        <p className="cooper text-center text-2xl font-normal text-stone-800 lg:whitespace-pre-line">
+        <p className="cooper text-center text-2xl font-normal text-foreground lg:whitespace-pre-line">
           Orazen uses AI security to enable digital inclusion and accessibility.
           <br />
           The goal is safer access, not security for security&apos;s sake.
@@ -57,10 +57,10 @@ const Why = () => {
             <p className="jetbrains-mono text-xs uppercase tracking-wide text-indigo-600">
               {item.weight}
             </p>
-            <p className="font-mono text-sm font-semibold uppercase leading-5 text-stone-800">
+            <p className="font-mono text-sm font-semibold uppercase leading-5 text-foreground">
               {item.title}
             </p>
-            <p className="text-sm leading-5 text-stone-600 dark:text-stone-500">
+            <p className="text-sm leading-5 text-muted-foreground">
               {item.description}
             </p>
           </li>

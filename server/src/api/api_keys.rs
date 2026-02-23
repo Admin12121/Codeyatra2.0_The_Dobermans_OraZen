@@ -9,6 +9,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::AppState;
+use super::plan_limits;
 use crate::middleware::auth::GuardConfig;
 use crate::middleware::{ErrorResponse, require_session_from_headers};
 use crate::utils::{generate_api_key, hash_api_key};
@@ -178,6 +179,61 @@ pub async fn create_api_key(
                 Json(ErrorResponse::new(msg, "INVALID_GUARD_CONFIG")),
             )
         })?;
+    }
+
+    let effective_plan = plan_limits::resolve_effective_plan(&state.db, org_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to resolve organization plan for API key creation: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(
+                    "Failed to validate API key limits",
+                    "PLAN_LOOKUP_FAILED",
+                )),
+            )
+        })?;
+
+    if let Some(limit) = plan_limits::api_key_limit_for_plan(&effective_plan) {
+        let current_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM api_key
+            WHERE organization_id = $1
+              AND revoked_at IS NULL
+            "#,
+        )
+        .bind(org_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to count API keys for limit enforcement: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(
+                    "Failed to validate API key limits",
+                    "API_KEY_COUNT_FAILED",
+                )),
+            )
+        })?;
+
+        if current_count >= limit {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(
+                    ErrorResponse::new(
+                        format!(
+                            "API key limit reached for {} plan ({}/{}). Revoke an existing key or upgrade your plan.",
+                            plan_limits::plan_display_name(&effective_plan),
+                            current_count,
+                            limit
+                        ),
+                        "API_KEY_LIMIT_REACHED",
+                    )
+                    .with_details(format!("resource=api_keys used={} limit={}", current_count, limit)),
+                ),
+            ));
+        }
     }
 
     let (key, prefix) = generate_api_key();

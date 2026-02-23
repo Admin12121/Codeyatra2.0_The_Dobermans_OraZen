@@ -61,7 +61,6 @@ import {
 } from "@/components/layout/landing/pricing";
 import { useSubscription } from "@/hooks/use-subscription";
 
-
 function usePrevious<T>(value: T): T | undefined {
   const [prev, setPrev] = useState<T | undefined>(undefined);
   const [current, setCurrent] = useState(value);
@@ -71,6 +70,7 @@ function usePrevious<T>(value: T): T | undefined {
   }
   return prev;
 }
+
 
 type SettingsTab =
   | "profile"
@@ -107,6 +107,7 @@ interface UsageData {
   billingPeriodEnd: string;
 }
 
+
 const TABS: {
   key: SettingsTab;
   label: string;
@@ -136,6 +137,7 @@ const TABS: {
     group: "Billing",
   },
 ];
+
 
 const VALID_TABS: SettingsTab[] = [
   "profile",
@@ -1220,7 +1222,7 @@ function PlanSection() {
   const currentPlan = resolvePlan(effectivePlanStr);
   const previewPlanStr = selectedTier.full.tier;
   const previewPlan = resolvePlan(previewPlanStr);
-  const previewGuardScans = selectedTier.value === -1 ? -1 : selectedTier.value;
+  const previewGuardScans = selectedTier.value === -1 ? -1 : selectedTier.value; // -1 = Enterprise / unlimited
   const previewGarakScans = previewPlan.limits.garakScans;
   const previewApiKeys = previewPlan.limits.apiKeys;
   const previewModelConfigs = previewPlan.limits.modelConfigs;

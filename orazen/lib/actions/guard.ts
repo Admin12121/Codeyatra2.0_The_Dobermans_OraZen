@@ -9,6 +9,10 @@ import {
   type ApiScannerConfig,
 } from "@/lib/api";
 
+// ============================================
+// Guard Log Types (camelCase for frontend use)
+// ============================================
+
 export interface GuardLog {
   id: string;
   organizationId: string;
@@ -25,6 +29,7 @@ export interface GuardLog {
   userAgent: string | null;
   scanOptions: unknown | null;
   responseId: string | null;
+  /** Full prompt text — only populated for threats (null for safe prompts) */
   promptText: string | null;
   sanitizedPrompt: string | null;
   createdAt: string;
@@ -44,6 +49,10 @@ export interface GuardLogsResult {
   logs: GuardLog[];
   pagination: PaginationInfo;
 }
+
+// ============================================
+// Scan Prompt Types
+// ============================================
 
 export interface ScanPromptInput {
   prompt: string;
@@ -71,6 +80,10 @@ export interface ScanPromptResult {
   latencyMs: number;
   cached: boolean;
 }
+
+// ============================================
+// Advanced Scan Types
+// ============================================
 
 export type ScanMode = "prompt_only" | "output_only" | "both";
 
@@ -116,6 +129,10 @@ export interface AdvancedScanResult {
   cached: boolean;
 }
 
+// ============================================
+// Stats Types
+// ============================================
+
 export interface TypeBreakdownItem {
   requestType: string;
   count: number;
@@ -135,6 +152,14 @@ export interface GuardStats {
   topCategories?: CategoryCountItem[];
 }
 
+// ============================================
+// Actions
+// ============================================
+
+/**
+ * Scan a prompt using the Guard API (for testing in dashboard)
+ * Calls Rust API: POST /v1/guard/scan (with API key auth)
+ */
 export async function scanPrompt(
   input: ScanPromptInput,
 ): Promise<ScanPromptResult | { error: string }> {
@@ -176,9 +201,18 @@ export async function scanPrompt(
   };
 }
 
+/**
+ * Advanced scan with full per-scanner configuration.
+ * Calls Rust API: POST /v1/guard/advanced-scan (with API key auth)
+ *
+ * Supports all LLM Guard input and output scanners with per-scanner
+ * enable/disable, thresholds, and scanner-specific settings.
+ * The scan_mode field controls prompt-only, output-only, or both.
+ */
 export async function advancedScan(
   input: AdvancedScanInput,
 ): Promise<AdvancedScanResult | { error: string }> {
+  // Convert frontend camelCase scanner configs to API snake_case
   const inputScanners: Record<string, ApiScannerConfig> = {};
   for (const [name, cfg] of Object.entries(input.inputScanners)) {
     inputScanners[name] = {
@@ -244,6 +278,12 @@ export async function advancedScan(
   };
 }
 
+/**
+ * List guard logs for the current organization with pagination and filters
+ * Calls Rust API: GET /v1/guard/logs
+ *
+ * @param params - Query parameters for filtering and pagination
+ */
 export async function listGuardLogs(
   params: {
     page?: number;
@@ -320,6 +360,12 @@ export async function listGuardLogs(
   };
 }
 
+/**
+ * Get guard statistics with optional time period filter
+ * Calls Rust API: GET /v1/guard/stats
+ *
+ * @param period - Optional time filter: "today", "24h", "48h", "3d", "7d", "30d"
+ */
 export async function getGuardStats(period?: string): Promise<GuardStats> {
   const { data, error } = await guardApi.getStats(period);
 

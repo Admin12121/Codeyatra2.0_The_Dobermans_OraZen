@@ -16,6 +16,7 @@ pub mod guard_logs;
 pub mod health;
 pub mod models;
 pub mod organization;
+pub mod plan_limits;
 pub mod routes;
 pub mod scan;
 

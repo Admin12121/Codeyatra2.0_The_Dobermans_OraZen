@@ -1,5 +1,7 @@
 import { getSessionToken } from "./session";
 
+// Re-export scanner metadata from the shared (client-safe) module
+// so existing server-side consumers can still import from "@/lib/api"
 export {
   ALL_INPUT_SCANNERS,
   ALL_OUTPUT_SCANNERS,
@@ -8,8 +10,10 @@ export {
   type OutputScannerName,
 } from "./scanner-meta";
 
+// Rust API base URL
 const API_BASE_URL = process.env.RUST_API_URL || "http://localhost:8080";
 
+// API error type
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -21,6 +25,44 @@ export class ApiError extends Error {
   }
 }
 
+type ParsedErrorBody = {
+  error?: string;
+  code?: string;
+};
+
+function parseErrorBody(rawBody: string): ParsedErrorBody {
+  const trimmed = rawBody.trim();
+  if (!trimmed) {
+    return {};
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object") {
+      return { error: trimmed };
+    }
+
+    const record = parsed as Record<string, unknown>;
+    const error =
+      typeof record.error === "string" && record.error.trim()
+        ? record.error
+        : undefined;
+    const code =
+      typeof record.code === "string" && record.code.trim()
+        ? record.code
+        : undefined;
+
+    if (error || code) {
+      return { error, code };
+    }
+
+    return { error: trimmed };
+  } catch {
+    return { error: trimmed };
+  }
+}
+
+// API response wrapper
 type ApiResponse<T> =
   | {
       data: T;
@@ -31,6 +73,10 @@ type ApiResponse<T> =
       error: ApiError;
     };
 
+/**
+ * Authenticated API client for Rust backend
+ * Automatically includes Bearer token from session
+ */
 export async function apiClient<T>(
   endpoint: string,
   options: RequestInit = {},
@@ -47,6 +93,7 @@ export async function apiClient<T>(
   const url = `${API_BASE_URL}${endpoint}`;
   const headers = new Headers(options.headers);
 
+  // Add authorization header
   headers.set("Authorization", `Bearer ${token}`);
   headers.set("Content-Type", "application/json");
 
@@ -57,7 +104,8 @@ export async function apiClient<T>(
     });
 
     if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
+      const rawErrorBody = await response.text().catch(() => "");
+      const errorBody = parseErrorBody(rawErrorBody);
       return {
         data: null,
         error: new ApiError(
@@ -82,6 +130,9 @@ export async function apiClient<T>(
   }
 }
 
+/**
+ * API client with custom API key auth (for Guard endpoints)
+ */
 export async function apiClientWithKey<T>(
   endpoint: string,
   apiKey: string,
@@ -100,7 +151,8 @@ export async function apiClientWithKey<T>(
     });
 
     if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
+      const rawErrorBody = await response.text().catch(() => "");
+      const errorBody = parseErrorBody(rawErrorBody);
       return {
         data: null,
         error: new ApiError(
@@ -125,6 +177,8 @@ export async function apiClientWithKey<T>(
   }
 }
 
+// Convenience methods for common HTTP methods
+
 export const api = {
   get: <T>(endpoint: string) => apiClient<T>(endpoint, { method: "GET" }),
 
@@ -142,6 +196,12 @@ export const api = {
 
   delete: <T>(endpoint: string) => apiClient<T>(endpoint, { method: "DELETE" }),
 };
+
+// ============================================================
+// Typed API endpoints
+// ============================================================
+
+// --- Guard API (legacy simple) ---
 
 export interface ScanPromptRequest {
   prompt: string;
@@ -171,6 +231,8 @@ export interface ScanPromptResponse {
   timestamp: string;
   threat_categories?: string[];
 }
+
+// --- Guard API (advanced scan) ---
 
 export type ApiScanMode = "prompt_only" | "output_only" | "both";
 
@@ -216,6 +278,8 @@ export interface AdvancedScanResponse {
   timestamp: string;
 }
 
+// --- Guard Logs ---
+
 export interface GuardLogItem {
   id: string;
   organization_id: string;
@@ -232,6 +296,7 @@ export interface GuardLogItem {
   user_agent: string | null;
   scan_options: unknown | null;
   response_id: string | null;
+  /** Full prompt text — only populated for threats (null for safe prompts) */
   prompt_text: string | null;
   sanitized_prompt: string | null;
   created_at: string;
@@ -270,6 +335,8 @@ export interface GuardStatsResponse {
   by_type?: TypeBreakdown[];
   top_categories?: CategoryCount[];
 }
+
+// --- Scan API ---
 
 export interface CustomEndpointConfig {
   url: string;
@@ -399,6 +466,8 @@ export interface ScanResultsResponse {
   completed_at: string | null;
 }
 
+// --- Retest API ---
+
 export interface RetestRequest {
   vulnerability_id: string;
   model_config: {
@@ -432,6 +501,8 @@ export interface RetestResponse {
   error_message?: string;
 }
 
+// --- Scan Logs API ---
+
 export interface ProbeLogEntry {
   id: string;
   probe_name: string;
@@ -463,6 +534,7 @@ export interface ScanLogsResponse {
   summary: ScanLogSummary;
 }
 
+// --- Scan SSE Event Types ---
 
 export interface ScanProgressEvent {
   scan_id: string;
@@ -483,6 +555,7 @@ export interface ScanVulnerabilityEvent {
   detector_name: string | null;
 }
 
+// --- Guard Config (per API key) ---
 
 export interface GuardScannerEntry {
   enabled: boolean;
@@ -513,6 +586,7 @@ export interface GetGuardConfigResponse {
   guard_config: GuardConfig | null;
 }
 
+// --- API Keys ---
 
 export interface CreateApiKeyRequest {
   name: string;
@@ -553,6 +627,7 @@ export interface RevokeApiKeyResponse {
   success: boolean;
 }
 
+// --- Model Configs ---
 
 export interface CreateModelConfigRequest {
   name: string;
@@ -560,6 +635,7 @@ export interface CreateModelConfigRequest {
   model: string;
   api_key?: string;
   base_url?: string;
+  /** Optional JSON settings (e.g. custom endpoint config for self-hosted models) */
   settings?: Record<string, unknown>;
   is_default?: boolean;
 }
@@ -585,6 +661,7 @@ export interface DeleteResponse {
   success: boolean;
 }
 
+// --- Organization ---
 
 export interface OrganizationResponse {
   id: string;
@@ -599,15 +676,29 @@ export interface OrganizationResponse {
 export interface OrganizationUsageResponse {
   organization_id: string;
   plan: string | null;
+  /** Total LLM Guard scans in the current billing period */
   guard_scans_used: number;
+  /** Total Garak vulnerability scans in the current billing period */
   garak_scans_used: number;
+  /** Number of active (non-revoked) API keys */
   api_keys_used: number;
+  /** Number of model configurations */
   model_configs_used: number;
+  /** Total threats blocked in the current billing period */
   threats_blocked: number;
+  /** Average guard scan latency in ms */
   avg_latency_ms: number;
+  /** Billing period start (ISO 8601) */
   billing_period_start: string;
+  /** Billing period end (ISO 8601) */
   billing_period_end: string;
 }
+
+// ============================================================
+// Typed API methods
+// ============================================================
+
+// --- Guard Log Query Params ---
 
 export interface ListGuardLogsParams {
   page?: number;

@@ -18,28 +18,61 @@ export interface ApiKey {
   guardConfig: GuardConfig | null;
 }
 
+// NOTE: Do NOT export types from "use server" modules.
+// Next.js transforms all exports into server-action RPC stubs,
+// which causes `ReferenceError: GuardConfig is not defined` at runtime.
+// Import GuardConfig / GuardScannerEntry directly from "@/lib/api" instead.
+
 export interface GuardConfigResult {
   keyId: string;
   keyName: string;
   guardConfig: GuardConfig | null;
 }
 
+export type CreateApiKeyResult =
+  | {
+      ok: true;
+      key: string;
+      id: string;
+    }
+  | {
+      ok: false;
+      error: string;
+      code?: string;
+    };
+
+/**
+ * Create a new API key
+ * Calls Rust API: POST /v1/api-keys
+ */
 export async function createApiKey(
   name: string,
   scopes: string[] = [],
   guardConfig?: GuardConfig | null,
-): Promise<{ key: string; id: string }> {
+): Promise<CreateApiKeyResult> {
   const { data, error } = await apiKeysApi.create({
     name,
     scopes,
     guard_config: guardConfig ?? undefined,
   });
   if (error) {
-    throw new Error(error.message);
+    return {
+      ok: false,
+      error: error.message,
+      code: error.code,
+    };
   }
-  return { key: data.key, id: data.id };
+  return {
+    ok: true,
+    key: data.key,
+    id: data.id,
+  };
 }
 
+/**
+ * List all API keys for the current organization
+ * Calls Rust API: GET /v1/api-keys
+ */
 export async function listApiKeys(): Promise<ApiKey[]> {
   const { data, error } = await apiKeysApi.list();
   if (error) {
@@ -62,6 +95,10 @@ export async function listApiKeys(): Promise<ApiKey[]> {
   }));
 }
 
+/**
+ * Revoke an API key
+ * Calls Rust API: DELETE /v1/api-keys/{keyId}
+ */
 export async function revokeApiKey(keyId: string): Promise<boolean> {
   const { data, error } = await apiKeysApi.revoke(keyId);
   if (error) {
@@ -70,6 +107,10 @@ export async function revokeApiKey(keyId: string): Promise<boolean> {
   return data.success;
 }
 
+/**
+ * Get the guard configuration for a specific API key
+ * Calls Rust API: GET /v1/api-keys/{keyId}/guard-config
+ */
 export async function getGuardConfig(
   keyId: string,
 ): Promise<GuardConfigResult> {
@@ -84,6 +125,13 @@ export async function getGuardConfig(
   };
 }
 
+/**
+ * Update the guard configuration for a specific API key.
+ * Pass `null` as guardConfig to remove the config (revert to legacy
+ * per-request behaviour where the caller must specify scanners each time).
+ *
+ * Calls Rust API: PUT /v1/api-keys/{keyId}/guard-config
+ */
 export async function updateGuardConfig(
   keyId: string,
   guardConfig: GuardConfig | null,

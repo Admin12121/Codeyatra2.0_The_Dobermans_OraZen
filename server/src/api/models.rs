@@ -10,6 +10,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::AppState;
+use super::plan_limits;
 use crate::middleware::{ErrorResponse, require_session_from_headers};
 use crate::utils::encryption;
 
@@ -120,6 +121,69 @@ pub async fn create_model_config(
                 "INVALID_NAME",
             )),
         ));
+    }
+
+    let effective_plan = plan_limits::resolve_effective_plan(&state.db, org_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to resolve organization plan for model config creation: {}",
+                e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(
+                    "Failed to validate model config limits",
+                    "PLAN_LOOKUP_FAILED",
+                )),
+            )
+        })?;
+
+    if let Some(limit) = plan_limits::model_config_limit_for_plan(&effective_plan) {
+        let current_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM model_config
+            WHERE organization_id = $1
+            "#,
+        )
+        .bind(org_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                "Failed to count model configs for limit enforcement: {}",
+                e
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(
+                    "Failed to validate model config limits",
+                    "MODEL_CONFIG_COUNT_FAILED",
+                )),
+            )
+        })?;
+
+        if current_count >= limit {
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(
+                    ErrorResponse::new(
+                        format!(
+                            "Model config limit reached for {} plan ({}/{}). Delete an existing model config or upgrade your plan.",
+                            plan_limits::plan_display_name(&effective_plan),
+                            current_count,
+                            limit
+                        ),
+                        "MODEL_CONFIG_LIMIT_REACHED",
+                    )
+                    .with_details(format!(
+                        "resource=model_configs used={} limit={}",
+                        current_count, limit
+                    )),
+                ),
+            ));
+        }
     }
 
     if req.is_default {

@@ -1,180 +1,130 @@
+mod api;
+mod cache;
+mod config;
+mod db;
+mod grpc;
+mod middleware;
+mod models;
+mod utils;
+
+use std::{env, net::SocketAddr};
+
+use api::{health, routes};
 use axum::{
-    Json, Router,
-    extract::{Query, State},
-    http::{HeaderMap, StatusCode},
-    response::sse::{Event, KeepAlive, Sse},
-    routing::{get, post},
+    Router,
+    http::{HeaderValue, Method},
+    routing::get,
 };
-use futures::{Stream, StreamExt, stream};
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap, convert::Infallible, env, net::SocketAddr, sync::Arc, time::Duration,
+use db::write_buffer::WriteBuffer;
+use redis::aio::ConnectionManager;
+use sqlx::postgres::PgPoolOptions;
+use tokio::net::TcpListener;
+use tower_http::{
+    compression::CompressionLayer,
+    cors::{Any, CorsLayer},
+    trace::TraceLayer,
 };
-use tokio::{net::TcpListener, sync::RwLock, time::Instant};
-use uuid::Uuid;
 
-const TICKET_TTL_SECS: u64 = 30;
-
-#[derive(Clone, Default)]
-struct AppState {
-    tickets: Arc<RwLock<HashMap<String, Instant>>>,
-}
-
-#[derive(Serialize)]
-struct PingResponse {
-    status: &'static str,
-}
-
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: &'static str,
-    code: &'static str,
-}
-
-#[derive(Serialize)]
-struct TicketResponse {
-    ticket: String,
-    expires_in: u64,
-}
-
-#[derive(Serialize)]
-struct ConnectedEvent {
-    organization_id: String,
-    user_id: String,
-    message: String,
-}
-
-#[derive(Serialize)]
-struct StatsUpdateEvent {
-    total_scans: u64,
-    threats_blocked: u64,
-    safe_prompts: u64,
-    avg_latency: u64,
-}
-
-#[derive(Deserialize)]
-struct GuardEventsQuery {
-    ticket: Option<String>,
-}
-
-async fn ping() -> Json<PingResponse> {
-    Json(PingResponse { status: "ok" })
-}
-
-fn sse_json_event<T: Serialize>(event_name: &str, payload: &T) -> Result<Event, Infallible> {
-    let data = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
-    Ok(Event::default().event(event_name).data(data))
-}
-
-async fn create_guard_events_ticket(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<TicketResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let is_authorized = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
-
-    if !is_authorized {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                error: "Missing Authorization header",
-                code: "UNAUTHORIZED",
-            }),
-        ));
-    }
-
-    let ticket = Uuid::new_v4().to_string();
-    let expires_at = Instant::now() + Duration::from_secs(TICKET_TTL_SECS);
-
-    state.tickets.write().await.insert(ticket.clone(), expires_at);
-
-    Ok(Json(TicketResponse {
-        ticket,
-        expires_in: TICKET_TTL_SECS,
-    }))
-}
-
-async fn guard_events_stream(
-    State(state): State<AppState>,
-    Query(query): Query<GuardEventsQuery>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<ErrorResponse>)> {
-    let Some(ticket) = query.ticket else {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                error: "Missing ticket query parameter",
-                code: "TICKET_INVALID",
-            }),
-        ));
-    };
-
-    let mut tickets = state.tickets.write().await;
-    let is_valid = tickets
-        .remove(&ticket)
-        .map(|expires_at| expires_at > Instant::now())
-        .unwrap_or(false);
-    drop(tickets);
-
-    if !is_valid {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorResponse {
-                error: "Invalid, expired, or already used ticket",
-                code: "TICKET_INVALID",
-            }),
-        ));
-    }
-
-    let connected_event = ConnectedEvent {
-        organization_id: "unknown".to_string(),
-        user_id: "unknown".to_string(),
-        message: "Connected to guard events stream".to_string(),
-    };
-
-    let initial = stream::once(async move { sse_json_event("connected", &connected_event) });
-
-    let periodic = stream::unfold((), |_| async move {
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        let stats = StatsUpdateEvent {
-            total_scans: 0,
-            threats_blocked: 0,
-            safe_prompts: 0,
-            avg_latency: 0,
-        };
-        Some((sse_json_event("stats_update", &stats), ()))
-    });
-
-    let events = initial.chain(periodic);
-
-    Ok(Sse::new(events).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("keep-alive"),
-    ))
+fn parse_allowed_origins(raw: &str) -> Vec<HeaderValue> {
+    raw.split(',')
+        .filter_map(|origin| {
+            let trimmed = origin.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            trimmed.parse::<HeaderValue>().ok()
+        })
+        .collect()
 }
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "server=info,tower_http=info".into()),
+        )
+        .init();
+
+    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgresql://orafinite_user:orafinite_dev_password@localhost:5432/orazen".to_string()
+    });
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let ml_sidecar_url =
+        env::var("ML_SIDECAR_URL").unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
     let host = env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port = env::var("SERVER_PORT")
         .ok()
-        .and_then(|p| p.parse::<u16>().ok())
+        .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
+
+    let db = match PgPoolOptions::new()
+        .max_connections(20)
+        .connect(&database_url)
+        .await
+    {
+        Ok(pool) => pool,
+        Err(err) => {
+            eprintln!("failed to connect to postgres: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    let redis_client = match redis::Client::open(redis_url.clone()) {
+        Ok(client) => client,
+        Err(err) => {
+            eprintln!("failed to create redis client for {redis_url}: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    let redis = match ConnectionManager::new(redis_client).await {
+        Ok(conn) => conn,
+        Err(err) => {
+            eprintln!("failed to connect to redis: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    let write_buffer = WriteBuffer::spawn(db.clone());
+    let state = api::AppState::new(db, redis, ml_sidecar_url, write_buffer);
+
+    let allowed_origins_raw = env::var("FRONTEND_URL")
+        .unwrap_or_else(|_| "http://localhost,http://frontend:3000,http://nginx".to_string());
+    let allowed_origins = parse_allowed_origins(&allowed_origins_raw);
+
+    let cors = {
+        let base = CorsLayer::new()
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::DELETE,
+                Method::OPTIONS,
+            ])
+            .allow_headers(Any);
+
+        if allowed_origins.is_empty() {
+            base.allow_origin(Any)
+        } else {
+            base.allow_origin(allowed_origins)
+        }
+    };
+
+    let app = Router::new()
+        .route("/ping", get(health::ping))
+        .route("/health", get(health::health_check))
+        .nest("/v1", routes::v1_routes())
+        .with_state(state)
+        .layer(CompressionLayer::new())
+        .layer(TraceLayer::new_for_http())
+        .layer(cors);
 
     let addr = format!("{host}:{port}")
         .parse::<SocketAddr>()
         .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], port)));
-
-    let state = AppState::default();
-
-    let app = Router::new()
-        .route("/ping", get(ping))
-        .route("/v1/guard/events/ticket", post(create_guard_events_ticket))
-        .route("/v1/guard/events", get(guard_events_stream))
-        .with_state(state);
 
     let listener = match TcpListener::bind(addr).await {
         Ok(listener) => listener,
