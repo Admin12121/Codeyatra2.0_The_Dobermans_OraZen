@@ -1,0 +1,431 @@
+syntax = "proto3";
+
+package ml_service;
+
+// ML Service for LLM Guard and Garak integration
+service MlService {
+    // Real-time prompt scanning (LLM Guard) - legacy simple API
+    rpc ScanPrompt(ScanRequest) returns (ScanResponse);
+
+    // Output validation (LLM Guard) - legacy simple API
+    rpc ScanOutput(OutputScanRequest) returns (OutputScanResponse);
+
+    // Advanced scan with full scanner customization (LLM Guard)
+    // Supports all prompt & output scanners with per-scanner config
+    rpc AdvancedScan(AdvancedScanRequest) returns (AdvancedScanResponse);
+
+    // Start a Garak vulnerability scan
+    rpc StartGarakScan(GarakRequest) returns (GarakResponse);
+
+    // Get Garak scan status
+    rpc GetGarakStatus(GarakStatusRequest) returns (GarakStatusResponse);
+
+    // Cancel a running Garak scan
+    rpc CancelGarakScan(GarakStatusRequest) returns (GarakResponse);
+
+    // Retest a specific vulnerability (re-run the same probe/prompt)
+    rpc RetestProbe(RetestRequest) returns (RetestResponse);
+
+    // Get detailed per-probe execution logs for a scan
+    rpc GetScanLogs(GarakStatusRequest) returns (ScanLogsResponse);
+
+    // List all available Garak probes with metadata for the probe picker UI
+    rpc ListGarakProbes(Empty) returns (GarakProbeListResponse);
+
+    // Health check
+    rpc HealthCheck(Empty) returns (HealthResponse);
+}
+
+message Empty {}
+
+message HealthResponse {
+    bool healthy = 1;
+    string version = 2;
+    // List of available input scanner names
+    repeated string available_input_scanners = 3;
+    // List of available output scanner names
+    repeated string available_output_scanners = 4;
+}
+
+// ============================================
+// Scan Mode
+// ============================================
+
+enum ScanMode {
+    PROMPT_ONLY = 0;
+    OUTPUT_ONLY = 1;
+    BOTH = 2;
+}
+
+// ============================================
+// Per-Scanner Configuration
+// ============================================
+
+// Configuration for a single scanner instance.
+// Each scanner can be enabled/disabled, have a threshold, and
+// carry arbitrary scanner-specific settings as a JSON string.
+message ScannerConfig {
+    // Whether this scanner is enabled
+    bool enabled = 1;
+
+    // Detection threshold (0.0 - 1.0). Interpretation depends on scanner.
+    // Default varies per scanner (typically 0.5 or 0.75).
+    float threshold = 2;
+
+    // Scanner-specific settings encoded as a JSON string.
+    // Examples:
+    //   Anonymize:       {"entity_types": ["PERSON","EMAIL"], "use_faker": true, "language": "en"}
+    //   BanTopics:       {"topics": ["violence","religion"]}
+    //   BanCompetitors:  {"competitors": ["CompanyA","CompanyB"], "redact": true}
+    //   BanSubstrings:   {"substrings": ["badword1","badword2"], "match_type": "word", "case_sensitive": false}
+    //   BanCode:         {"languages": ["python","javascript"], "is_blocked": true}
+    //   Code:            {"languages": ["python"], "is_blocked": false}
+    //   Language:        {"valid_languages": ["en","es","fr"], "match_type": "full"}
+    //   Regex:           {"patterns": ["\\d{3}-\\d{2}-\\d{4}"], "match_type": "search", "redact": true}
+    //   Sentiment:       {"threshold": -0.1}
+    //   TokenLimit:      {"limit": 4096, "encoding_name": "cl100k_base"}
+    //   JSON:            {"required_elements": 0, "repair": true}
+    //   LanguageSame:    {}
+    //   NoRefusal:       {"match_type": "full"}
+    //   ReadingTime:     {"max_seconds": 60, "truncate": false}
+    //   FactualConsistency: {}
+    //   Relevance:       {}
+    //   URLReachability: {"success_status_codes": [200, 301, 302]}
+    //   MaliciousURLs:   {"use_onnx": false}
+    //   Gibberish:       {"match_type": "full"}
+    //   Toxicity:        {"match_type": "sentence"}
+    //   Bias:            {"match_type": "full"}
+    //   Sensitive:       {"entity_types": ["PERSON","EMAIL"], "redact": true}
+    string settings_json = 3;
+}
+
+// ============================================
+// LLM Guard - Legacy Prompt Scanning
+// ============================================
+
+message ScanRequest {
+    string prompt = 1;
+    bool check_injection = 2;
+    bool check_toxicity = 3;
+    bool check_pii = 4;
+    bool sanitize = 5;
+}
+
+message ScanResponse {
+    bool safe = 1;
+    string sanitized_prompt = 2;
+    float risk_score = 3;
+    repeated Threat threats = 4;
+    int32 latency_ms = 5;
+}
+
+message Threat {
+    string threat_type = 1;
+    float confidence = 2;
+    string description = 3;
+    string severity = 4;  // critical, high, medium, low
+}
+
+// ============================================
+// LLM Guard - Legacy Output Scanning
+// ============================================
+
+message OutputScanRequest {
+    string output = 1;
+    string original_prompt = 2;
+}
+
+message OutputScanResponse {
+    bool safe = 1;
+    string sanitized_output = 2;
+    repeated OutputIssue issues = 3;
+    int32 latency_ms = 4;
+}
+
+message OutputIssue {
+    string issue_type = 1;
+    string description = 2;
+    string severity = 3;
+}
+
+// ============================================
+// LLM Guard - Advanced Scan (Full Customization)
+// ============================================
+
+// Advanced scan request with per-scanner configuration.
+// Supports all LLM Guard input and output scanners.
+//
+// Input (Prompt) Scanners:
+//   anonymize, ban_code, ban_competitors, ban_substrings, ban_topics,
+//   code, gibberish, invisible_text, language, prompt_injection,
+//   regex, secrets, sentiment, token_limit, toxicity
+//
+// Output Scanners:
+//   ban_code, ban_competitors, ban_substrings, ban_topics, bias,
+//   code, deanonymize, json, language, language_same, malicious_urls,
+//   no_refusal, reading_time, factual_consistency, gibberish, regex,
+//   relevance, sensitive, sentiment, toxicity, url_reachability
+
+message AdvancedScanRequest {
+    // The prompt text to scan (required for PROMPT_ONLY and BOTH modes)
+    string prompt = 1;
+
+    // The LLM output text to scan (required for OUTPUT_ONLY and BOTH modes)
+    string output = 2;
+
+    // What to scan: prompt only, output only, or both
+    ScanMode scan_mode = 3;
+
+    // Per-scanner configuration for input (prompt) scanners.
+    // Key is the scanner name (snake_case), value is the config.
+    // Only scanners present in this map AND with enabled=true will run.
+    // If this map is empty and scan_mode includes prompt scanning,
+    // a sensible default set of scanners will be used.
+    map<string, ScannerConfig> input_scanners = 4;
+
+    // Per-scanner configuration for output scanners.
+    // Key is the scanner name (snake_case), value is the config.
+    // Only scanners present in this map AND with enabled=true will run.
+    // If this map is empty and scan_mode includes output scanning,
+    // a sensible default set of scanners will be used.
+    map<string, ScannerConfig> output_scanners = 5;
+
+    // If true, return sanitized versions of prompt/output
+    bool sanitize = 6;
+
+    // If true, stop scanning after the first invalid result (faster)
+    bool fail_fast = 7;
+}
+
+// Result from a single scanner execution
+message ScannerResult {
+    // Scanner name (e.g. "prompt_injection", "toxicity")
+    string scanner_name = 1;
+
+    // Whether this scanner passed (true = safe, false = threat/issue detected)
+    bool is_valid = 2;
+
+    // Scanner-specific score (interpretation varies by scanner)
+    float score = 3;
+
+    // Human-readable description of the finding
+    string description = 4;
+
+    // Severity level: critical, high, medium, low
+    string severity = 5;
+
+    // Scanner execution time in milliseconds
+    int32 scanner_latency_ms = 6;
+}
+
+message AdvancedScanResponse {
+    // Overall safety verdict (true only if ALL scanners passed)
+    bool safe = 1;
+
+    // Sanitized prompt (populated if sanitize=true and scan_mode includes prompt)
+    string sanitized_prompt = 2;
+
+    // Sanitized output (populated if sanitize=true and scan_mode includes output)
+    string sanitized_output = 3;
+
+    // Overall risk score (max of all scanner scores where is_valid=false)
+    float risk_score = 4;
+
+    // Results from each input (prompt) scanner that was executed
+    repeated ScannerResult input_results = 5;
+
+    // Results from each output scanner that was executed
+    repeated ScannerResult output_results = 6;
+
+    // Total scan latency in milliseconds
+    int32 latency_ms = 7;
+
+    // Which mode was actually executed
+    ScanMode scan_mode = 8;
+
+    // Number of input scanners executed
+    int32 input_scanners_run = 9;
+
+    // Number of output scanners executed
+    int32 output_scanners_run = 10;
+}
+
+// ============================================
+// Garak - Vulnerability Scanning
+// ============================================
+
+// Configuration for a custom REST API endpoint (e.g. user's FastAPI + Ollama wrapper).
+// Allows Garak to test any HTTP-based LLM API regardless of format.
+message CustomEndpointConfig {
+    // The API endpoint URL (e.g. http://localhost:8000/ai)
+    string url = 1;
+
+    // HTTP method — default POST
+    string method = 2;
+
+    // JSON request body template with {{prompt}} placeholder.
+    // Examples:
+    //   '{"prompt": "{{prompt}}"}'
+    //   '{"messages": [{"role": "user", "content": "{{prompt}}"}], "model": "llama3"}'
+    string request_template = 3;
+
+    // Dot-path to extract response text from the JSON response.
+    // Examples:
+    //   "response"                      -> json["response"]
+    //   "choices.0.message.content"     -> json["choices"][0]["message"]["content"]
+    //   "data.text"                     -> json["data"]["text"]
+    string response_path = 4;
+
+    // Optional additional HTTP headers (e.g. custom auth)
+    map<string, string> headers = 5;
+}
+
+message GarakRequest {
+    string provider = 1;  // openai, huggingface, ollama, custom
+    string model = 2;
+    string api_key = 3;
+    string base_url = 4;
+    repeated string probes = 5;  // specific probe IDs to run, empty = use scan_type preset
+    string scan_type = 6;  // quick, standard, comprehensive, custom
+
+    // Custom REST endpoint config — required when provider is "custom"
+    // or when testing a user's own API wrapper
+    CustomEndpointConfig custom_endpoint = 7;
+
+    // Max prompts per probe class (0 = use default of 25)
+    int32 max_prompts_per_probe = 8;
+}
+
+message GarakResponse {
+    string scan_id = 1;
+    string status = 2;
+    int32 estimated_duration_seconds = 3;
+}
+
+message GarakStatusRequest {
+    string scan_id = 1;
+}
+
+message GarakStatusResponse {
+    string scan_id = 1;
+    string status = 2;  // queued, running, completed, failed, cancelled
+    int32 progress = 3;
+    int32 probes_completed = 4;
+    int32 probes_total = 5;
+    int32 vulnerabilities_found = 6;
+    repeated Vulnerability vulnerabilities = 7;
+    string error_message = 8;
+    // Verbose per-probe execution logs streamed incrementally
+    repeated ProbeLog probe_logs = 9;
+}
+
+message Vulnerability {
+    string probe_name = 1;
+    string category = 2;
+    string severity = 3;
+    string description = 4;
+    string attack_prompt = 5;
+    string model_response = 6;
+    string recommendation = 7;
+    float success_rate = 8;         // detector confidence score (0.0-1.0)
+    string detector_name = 9;       // which detector flagged this
+    string probe_class = 10;        // full garak probe class path
+    int32 probe_duration_ms = 11;   // how long this probe took to execute
+}
+
+// Detailed per-probe execution log entry
+message ProbeLog {
+    string probe_name = 1;
+    string probe_class = 2;          // full garak class path
+    string status = 3;               // running, passed, failed, error, skipped
+    int64 started_at_ms = 4;         // epoch millis
+    int64 completed_at_ms = 5;       // epoch millis
+    int32 duration_ms = 6;
+    int32 prompts_sent = 7;          // number of attack prompts sent
+    int32 prompts_passed = 8;        // prompts model handled safely
+    int32 prompts_failed = 9;        // prompts that revealed a vulnerability
+    string detector_name = 10;
+    repeated float detector_scores = 11;  // raw scores from detector
+    string error_message = 12;
+    repeated string log_lines = 13;  // verbose log messages
+}
+
+// ============================================
+// Retest - Re-run a specific vulnerability
+// ============================================
+
+message RetestRequest {
+    string scan_id = 1;
+    string probe_name = 2;
+    string probe_class = 3;          // full garak probe class path to re-run
+    string attack_prompt = 4;        // exact prompt to replay
+    string provider = 5;
+    string model = 6;
+    string api_key = 7;
+    string base_url = 8;
+    int32 num_attempts = 9;          // how many times to repeat (default 3)
+}
+
+message RetestResult {
+    int32 attempt_number = 1;
+    bool is_vulnerable = 2;
+    string model_response = 3;
+    float detector_score = 4;
+    int32 duration_ms = 5;
+    string error_message = 6;
+}
+
+message RetestResponse {
+    string probe_name = 1;
+    string attack_prompt = 2;
+    int32 total_attempts = 3;
+    int32 vulnerable_count = 4;      // how many attempts confirmed the vuln
+    int32 safe_count = 5;
+    float confirmation_rate = 6;     // vulnerable_count / total_attempts
+    repeated RetestResult results = 7;
+    string status = 8;               // completed, error
+    string error_message = 9;
+}
+
+// ============================================
+// Scan Logs - Detailed execution logs
+// ============================================
+
+message ScanLogsResponse {
+    string scan_id = 1;
+    repeated ProbeLog logs = 2;
+    int32 total_probes = 3;
+    int32 total_prompts_sent = 4;
+    int32 total_duration_ms = 5;
+}
+
+// ============================================
+// Garak Probe Discovery - for frontend probe picker
+// ============================================
+
+// Metadata about a single probe for the UI
+message GarakProbeInfo {
+    string id = 1;                     // short name, e.g. "promptinject"
+    string name = 2;                   // display name, e.g. "Prompt Injection"
+    string description = 3;            // what this probe tests
+    string category = 4;               // category id, e.g. "injection"
+    string severity_range = 5;         // e.g. "high-critical"
+    bool default_enabled = 6;          // whether enabled in standard scan
+    repeated string tags = 7;          // searchable tags
+    repeated string class_paths = 8;   // garak class paths
+    bool available = 9;                // whether classes exist in installed garak version
+}
+
+// Metadata about a probe category for the UI
+message GarakProbeCategory {
+    string id = 1;                     // e.g. "injection"
+    string name = 2;                   // e.g. "Prompt Injection"
+    string description = 3;
+    string icon = 4;                   // icon hint for frontend
+    repeated string probe_ids = 5;     // probes in this category
+}
+
+message GarakProbeListResponse {
+    repeated GarakProbeCategory categories = 1;
+    repeated GarakProbeInfo probes = 2;
+}

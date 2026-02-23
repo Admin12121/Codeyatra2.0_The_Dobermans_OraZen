@@ -36,11 +36,10 @@ RUN python3.11 -m grpc_tools.protoc \
     -I/proto \
     --python_out=/app \
     --grpc_python_out=/app \
-    /proto/ml_service.proto
+    ./ml_service.proto
 
 
 COPY ml_server/ .
-
 
 ENV PYTHONUNBUFFERED=1
 ENV GRPC_PORT=50051
