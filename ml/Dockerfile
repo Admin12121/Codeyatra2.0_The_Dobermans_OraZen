@@ -1,11 +1,9 @@
 FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 
-
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
 WORKDIR /app
-
 
 RUN apt-get update && apt-get install -y \
     software-properties-common \
@@ -21,25 +19,24 @@ RUN apt-get update && apt-get install -y \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
     && rm -rf /var/lib/apt/lists/*
 
-
 RUN python3.11 -m pip install --upgrade pip
 
+COPY ml/requirement.txt /tmp/requirements.txt
+RUN python3.11 -m pip install --no-cache-dir -r /tmp/requirements.txt
 
-COPY ml_server/requirements.txt .
-
-
-RUN python3.11 -m pip install --no-cache-dir -r requirements.txt
-
-
-COPY proto /proto
+COPY ml/ml_service.proto /app/ml_service.proto
 RUN python3.11 -m grpc_tools.protoc \
-    -I/proto \
+    -I/app \
     --python_out=/app \
     --grpc_python_out=/app \
-    ./ml_service.proto
+    /app/ml_service.proto
 
+RUN mkdir -p /app/scanners
 
-COPY ml_server/ .
+COPY ml/server.py /app/server.py
+COPY ml/ml_server/garak_scanner.py /app/scanners/garak_scanner.py
+COPY ml/ml_server/llm_guard.py /app/scanners/llm_guard_scanner.py
+RUN touch /app/scanners/__init__.py
 
 ENV PYTHONUNBUFFERED=1
 ENV GRPC_PORT=50051
